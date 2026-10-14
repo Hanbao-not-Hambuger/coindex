@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 jobs:
-  verify:
+  macos:
     runs-on: macos-14
     timeout-minutes: 20
     env:
@@ -30,3 +30,28 @@ jobs:
         run: python3 scripts/check-public-release.py
       - name: Source package
         run: python3 scripts/package-source.py
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CODEX_TODO_CODEX: /usr/bin/true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Tk and headless desktop tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb
+      - name: Backend and Linux installer regression tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Build Linux application bundle
+        run: bash scripts/build-linux.sh
+      - name: Install bundle in isolated user directories
+        run: |
+          export XDG_DATA_HOME="$RUNNER_TEMP/coindex-xdg-data"
+          bash dist/coindex-linux/scripts/install-linux.sh --prefix "$RUNNER_TEMP/coindex-prefix"
+          "$RUNNER_TEMP/coindex-prefix/bin/coindex" --help
+      - name: Linux desktop smoke test
+        run: xvfb-run -a python3 linux/app.py --demo --data-dir "$RUNNER_TEMP/coindex-gui-smoke" --smoke-test

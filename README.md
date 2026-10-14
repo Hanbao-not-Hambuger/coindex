@@ -7,6 +7,7 @@
     <a href="https://github.com/Junming-Liang/coindex/releases/latest"><img src="https://img.shields.io/github/v/release/Junming-Liang/coindex" alt="Latest release" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
     <img src="https://img.shields.io/badge/macOS-14%2B-black.svg" alt="macOS 14 or later" />
+    <img src="https://img.shields.io/badge/Linux-Python%203.9%2B-blue.svg" alt="Linux desktop with Python 3.9 or later" />
     <img src="https://img.shields.io/badge/architecture-arm64%20%7C%20x86__64-blue.svg" alt="Apple Silicon and Intel" />
   </p>
   <p><a href="https://github.com/Junming-Liang/coindex/releases/tag/v1.9.0">下载 1.9.0</a> · <a href="#快速开始">快速开始</a> · <a href="docs/user-guide.md">使用指南</a> · <a href="https://github.com/Junming-Liang/coindex/issues">反馈问题</a></p>
@@ -32,6 +33,7 @@
 - [功能：Agent 如何整理目标与跟进](#功能)
 - [界面截图与使用演示](#界面截图与使用演示)
 - [安装](#安装)
+- [Linux 安装](#linux-安装)
 - [快速开始](#快速开始)
 - [配置 Codex](#配置-codex)
 - [配置 SSH](#配置-ssh)
@@ -204,6 +206,29 @@ shasum -a 256 coindex-1.9.0-macos-universal.zip
 
 卸载时退出并移除 `coindex.app`。个人数据不会随应用移除而删除；如需清除，请先备份下方的数据目录，再自行移除。
 
+### Linux 安装
+
+Linux 桌面版使用 Python 3.9+ 和 Tkinter，不需要安装 Python 第三方依赖或管理员权限。Ubuntu / Debian 安装 `python3-tk`；Fedora 安装 `python3-tkinter`。请先确保 `python3` 和 `python3-tk` 来自同一套 Python 环境。
+
+先从源码构建 Linux 包：
+
+```sh
+bash scripts/build-linux.sh
+bash dist/coindex-linux/scripts/install-linux.sh
+```
+
+如果你已经解压了包含 `coindex-linux/` 目录的发行包，在该目录的父目录运行：
+
+```sh
+bash coindex-linux/scripts/install-linux.sh
+```
+
+安装器将程序放入 `${XDG_DATA_HOME:-~/.local/share}/coindex-app`，命令行入口放入 `~/.local/bin/coindex`，并创建桌面菜单项。若 `~/.local/bin` 尚未加入 `PATH`，请将它加入当前桌面会话的用户 PATH，或用完整路径启动。可通过 `--prefix` 指定命令行入口前缀；`XDG_DATA_HOME` 按 XDG 规则指定数据根目录。安装器只复制程序，不启动界面、不安装依赖，也不使用 sudo。
+
+待办数据库和设置保存在 `${XDG_DATA_HOME:-~/.local/share}/coindex/`。升级会替换程序文件并保留此目录。卸载时退出应用后，移除程序目录、`~/.local/bin/coindex`、`applications/org.coindex.desktop.desktop` 和图标；待办数据需单独备份并删除。
+
+终端中可使用 `coindex --demo` 启动不连接真实 Codex 的虚构数据演示。Linux 提供原生桌面窗口，不包含 macOS 菜单栏宠物、系统托盘或登录启动。桌面打开和催办取决于当前桌面环境已配置的 `codex://` 协议处理器，以及已有的 Codex 桌面 IPC；读取会话并不保证这些集成功能可用。完整依赖、限制和源码启动方法见 [Linux 指南](docs/linux.md)。
+
 ## 快速开始
 
 1. 安装并登录 Codex，在 Codex 中创建至少一个会话。
@@ -344,7 +369,7 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=yes dev-server true
 
 ## 从源码构建
 
-需要 macOS 14+、Xcode 或 Command Line Tools、Python 3.9+。常规构建与后端测试不需要第三方 Python 库。
+macOS 构建需要 macOS 14+、Xcode 或 Command Line Tools。Linux 桌面构建需要 Python 3.9+ 和 Tkinter。常规构建与后端测试不需要第三方 Python 库。
 
 ```sh
 git clone https://github.com/Junming-Liang/coindex.git
@@ -353,6 +378,14 @@ xcode-select --install  # 已安装编译工具时跳过
 python3 -m unittest discover -s tests -v
 bash scripts/build.sh
 open dist/coindex.app
+```
+
+Linux 桌面构建与源码启动：
+
+```sh
+python3 -m unittest discover -s tests -v
+bash scripts/build-linux.sh
+python3 linux/app.py --demo
 ```
 
 默认构建当前 Mac 架构；通用构建使用：
