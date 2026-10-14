@@ -20,12 +20,12 @@ from test_backend import conversation, entry
 
 class PlatformTests(unittest.TestCase):
     def test_data_defaults_use_xdg_and_ignore_relative_xdg_paths(self):
-        with patch("platform_paths.sys.platform", "linux"), patch.dict(os.environ, {}, clear=True), patch("pathlib.Path.home", return_value=pathlib.Path("/home/example")):
-            self.assertEqual(default_data_dir(), pathlib.Path("/home/example/.local/share/coindex"))
+        with patch("platform_paths.sys.platform", "linux"), patch.dict(os.environ, {}, clear=True), patch("pathlib.Path.home", return_value=pathlib.Path("/example-home")):
+            self.assertEqual(default_data_dir(), pathlib.Path("/example-home/.local/share/coindex"))
             with patch.dict(os.environ, {"XDG_DATA_HOME": "/data with spaces"}):
                 self.assertEqual(default_data_dir(), pathlib.Path("/data with spaces/coindex"))
             with patch.dict(os.environ, {"XDG_DATA_HOME": "relative"}):
-                self.assertEqual(default_data_dir(), pathlib.Path("/home/example/.local/share/coindex"))
+                self.assertEqual(default_data_dir(), pathlib.Path("/example-home/.local/share/coindex"))
 
     def test_macos_default_and_explicit_data_override_are_preserved(self):
         with patch("platform_paths.sys.platform", "darwin"), patch.dict(os.environ, {}, clear=True):

@@ -31,6 +31,8 @@ cat > "$APP/coindex" <<'LAUNCHER'
 set -eu
 APP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PYTHON="${CODEX_TODO_PYTHON:-python3}"
+# Keep install paths out of bytecode and leave the shareable bundle immutable.
+export PYTHONDONTWRITEBYTECODE=1
 exec "$PYTHON" "$APP_DIR/linux/app.py" "$@"
 LAUNCHER
 chmod 0755 "$APP/coindex"
