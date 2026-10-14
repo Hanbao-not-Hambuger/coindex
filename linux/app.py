@@ -222,6 +222,13 @@ class CoindexApp:
         self.request_inflight = False
         self.last_auto_sync = 0
         self.initial_settings_prompted = False
+        self.task_cards = {}
+        self._task_order = []
+        self._filter_signature = None
+        self._detail_signature = None
+        self.empty_state = None
+        self._empty_signature = None
+        self._conversation_filter = None
         self.client_factory = client_factory
         self._build()
         if demo:
@@ -326,8 +333,13 @@ class CoindexApp:
         self.summary_var = tk.StringVar(value="把每件事的进展和下一步放在一起。")
         ttk.Label(content, textvariable=self.summary_var, style="Muted.TLabel").pack(anchor="w", pady=(2, 20))
         self.status_var = tk.StringVar(value="")
-        self.status_line = ttk.Label(content, textvariable=self.status_var, style="Muted.TLabel", wraplength=860)
-        self.status_line.pack(side="bottom", anchor="w", fill="x", pady=(12, 0))
+        status_bar = tk.Frame(content, bg=self.BG)
+        status_bar.pack(side="bottom", fill="x", pady=(12, 0))
+        ttk.Button(status_bar, text="状态详情", style="Quiet.TButton", command=self._show_status).pack(side="right", padx=(8, 0))
+        self.status_line = tk.Label(status_bar, textvariable=self.status_var, bg=self.BG, fg=self.MUTED,
+                                    font=(self.font_family, 9), height=2, anchor="w", justify="left", wraplength=860)
+        self.status_line.pack(side="left", fill="x", expand=True)
+        self.status_line.bind("<Configure>", lambda event: self.status_line.configure(wraplength=max(200, event.width)))
 
         self.search_var = tk.StringVar()
         self.kind_var = tk.StringVar(value="全部类型")
@@ -420,6 +432,9 @@ class CoindexApp:
             self.search_hint.place_forget()
         else:
             self.search_hint.place(x=3, rely=.5, anchor="w")
+
+    def _show_status(self):
+        messagebox.showinfo("状态详情", self.status_var.get() or "暂无状态信息", parent=self.root)
 
     def _choose_kind(self, kind):
         self.kind_var.set(kind)
@@ -543,8 +558,6 @@ class CoindexApp:
     def _render_tasks(self):
         if not hasattr(self, "cards"):
             return
-        for child in self.cards.winfo_children():
-            child.destroy()
         tasks = self.snapshot.get("tasks", [])
         search = self.search_var.get().strip().lower()
         chosen_kind = self.kind_var.get()
@@ -564,24 +577,72 @@ class CoindexApp:
             if chosen_host != "全部来源" and self.host_values.get(chosen_host, chosen_host) != task.get("host"):
                 continue
             rows.append(task)
+        filters = (search, chosen_kind, chosen_host, self.show_inactive)
+        filter_changed = filters != self._filter_signature
+        self._filter_signature = filters
+        top = self.canvas.canvasy(0)
+        anchor = next(((tid, top - self.task_cards[tid][0].winfo_y()) for tid in self._task_order
+                       if self.task_cards[tid][0].winfo_y() + self.task_cards[tid][0].winfo_height() > top), None)
+        focused = self.root.focus_get()
+        focused_card = next((tid for tid, (card, _) in self.task_cards.items()
+                             if focused and (str(focused) == str(card) or str(focused).startswith(str(card) + "."))), None)
         self.visible_task_ids = [t["id"] for t in rows]
         self.selected_task = self.selected_task if self.selected_task in self.visible_task_ids else (rows[0]["id"] if rows else None)
         self.result_count = len(rows)
         self.result_label.configure(text="%d 项%s" % (len(rows), "历史事项" if self.show_inactive else "待跟进事项"))
+        layout_changed = self._task_order != self.visible_task_ids
+        for tid in list(self.task_cards):
+            if tid not in self.visible_task_ids:
+                self.task_cards.pop(tid)[0].destroy()
         for task in rows:
-            self._task_card(task, selected=task["id"] == self.selected_task)
+            tid = task["id"]
+            key = (task.get("kind"), task.get("title"), self._host_label(task.get("host")),
+                   task.get("progress") or task.get("detail"), task.get("next_action"))
+            previous = self.task_cards.get(tid)
+            selected = tid == self.selected_task
+            if previous is None:
+                self.task_cards[tid] = (self._task_card(task, selected), key)
+                layout_changed = True
+            else:
+                card = previous[0]
+                if previous[1] != key:
+                    self._update_task_card(card, task)
+                    self.task_cards[tid] = (card, key)
+                    layout_changed = True
+                if card.selected != selected:
+                    card.selected = selected
+                    card.set_outline(self.ACCENT if selected else self.BORDER)
+        if rows and self.empty_state is not None:
+            self.empty_state.destroy()
+            self.empty_state = None
+            self._empty_signature = None
+        if rows and layout_changed:
+            previous = None
+            for tid in self.visible_task_ids:
+                card = self.task_cards[tid][0]
+                first = self.cards.pack_slaves()[0]
+                if previous is not None:
+                    card.pack_configure(after=previous)
+                elif card is not first:
+                    card.pack_configure(before=first)
+                previous = card
+        self._task_order = list(self.visible_task_ids)
         if not rows:
-            empty = tk.Frame(self.cards, bg=self.BG, pady=56)
-            empty.pack(fill="both", expand=True)
-            Icon(empty, "check" if not search else "search", size=36, color=self.ACCENT, bg=self.BG).pack(pady=(0, 18))
-            tk.Label(empty, text="暂时没有匹配的事项" if search else "给每件事一个下一步", bg=self.BG, fg=self.INK,
-                     font=(self.font_family, 15, "bold")).pack()
-            tk.Label(empty, text="试试其他关键词或清除筛选。" if search else "更新对话，或添加一件需要跟进的事。", bg=self.BG,
-                     fg=self.MUTED, font=(self.font_family, 10)).pack(pady=(10, 18))
-            if search or chosen_kind != "全部类型" or chosen_host != "全部来源" or self.show_inactive:
-                ttk.Button(empty, text="清除筛选", command=self._clear_filters).pack()
-            elif not self.demo:
-                ttk.Button(empty, text="新建待办", style="Accent.TButton", command=self.new_task).pack()
+            if self._empty_signature != filters:
+                if self.empty_state is not None:
+                    self.empty_state.destroy()
+                empty = self.empty_state = tk.Frame(self.cards, bg=self.BG, pady=56)
+                empty.pack(fill="both", expand=True)
+                self._empty_signature = filters
+                Icon(empty, "check" if not search else "search", size=36, color=self.ACCENT, bg=self.BG).pack(pady=(0, 18))
+                tk.Label(empty, text="暂时没有匹配的事项" if search else "给每件事一个下一步", bg=self.BG, fg=self.INK,
+                         font=(self.font_family, 15, "bold")).pack()
+                tk.Label(empty, text="试试其他关键词或清除筛选。" if search else "更新对话，或添加一件需要跟进的事。", bg=self.BG,
+                         fg=self.MUTED, font=(self.font_family, 10)).pack(pady=(10, 18))
+                if search or chosen_kind != "全部类型" or chosen_host != "全部来源" or self.show_inactive:
+                    ttk.Button(empty, text="清除筛选", command=self._clear_filters).pack()
+                elif not self.demo:
+                    ttk.Button(empty, text="新建待办", style="Accent.TButton", command=self.new_task).pack()
             self.detail.pack_forget()
         elif not self.detail.winfo_manager():
             self.detail.pack(side="right", fill="y", padx=(20, 0))
@@ -589,10 +650,30 @@ class CoindexApp:
             self._show_detail(by_id[self.selected_task])
         else:
             self._clear_detail()
+        if layout_changed or filter_changed:
+            # Resolve only geometry work, then retain the same visible task and
+            # pixel offset even when content above it grows or is inserted.
+            self.cards.update_idletasks()
+            if filter_changed:
+                target = 0
+            elif anchor and anchor[0] in self.task_cards:
+                target = self.task_cards[anchor[0]][0].winfo_y() + anchor[1]
+            else:
+                target = top
+            self._restore_canvas_y(self.canvas, target)
+            if focused_card in self.task_cards:
+                self.task_cards[focused_card][0].focus_set()
         self._refresh_navigation()
         if self.tab == "tasks":
             sources = len({t.get("host") for t in rows if t.get("host") not in (None, "manual")})
             self.summary_var.set("%d 件事项 · %d 个来源 · 进展与下一步，一目了然。" % (len(rows), sources))
+
+    @staticmethod
+    def _restore_canvas_y(canvas, top):
+        bounds = canvas.bbox("all")
+        if bounds and bounds[3] > bounds[1]:
+            canvas.configure(scrollregion=bounds)
+            canvas.yview_moveto(max(0, top - bounds[1]) / (bounds[3] - bounds[1]))
 
     def _clear_filters(self):
         self.search_var.set("")
@@ -606,10 +687,13 @@ class CoindexApp:
             return "手动"
         return next((h.get("name") or host for h in self.snapshot.get("hosts", []) if h["id"] == host), host or "未知来源")
 
-    def _badge(self, parent, kind):
+    def _badge_colors(self, kind):
         colors = {"review": (self.ACCENT, TOKENS["accent_wash"]), "running": ("#2F7298", "#EAF3F9"),
                   "continue": ("#93672C", "#FAF1E2"), "decision": ("#79539D", "#F2ECF8")}
-        ink, fill = colors.get(kind, (self.MUTED, TOKENS["subtle"]))
+        return colors.get(kind, (self.MUTED, TOKENS["subtle"]))
+
+    def _badge(self, parent, kind):
+        ink, fill = self._badge_colors(kind)
         badge = tk.Label(parent, text=self._kind_label(kind), bg=fill, fg=ink,
                          font=(self.font_family, 9), padx=7, pady=2)
         return badge
@@ -617,13 +701,16 @@ class CoindexApp:
     def _task_card(self, task, selected=False):
         card = RoundedPanel(self.cards, fill=self.SURFACE, outline=self.ACCENT if selected else self.BORDER,
                             radius=12, padding=16, takefocus=True, cursor="hand2")
+        card.selected = selected
         card.pack(fill="x", pady=(0, 12), padx=(1, 7))
         frame = card.body
         meta = tk.Frame(frame, bg=self.SURFACE)
         meta.pack(fill="x", pady=(0, 9))
-        self._badge(meta, task.get("kind")).pack(side="left")
-        tk.Label(meta, text=self._host_label(task.get("host")), bg=self.SURFACE, fg=self.MUTED,
-                 font=(self.font_family, 9)).pack(side="right")
+        badge = self._badge(meta, task.get("kind"))
+        badge.pack(side="left")
+        host = tk.Label(meta, text=self._host_label(task.get("host")), bg=self.SURFACE, fg=self.MUTED,
+                        font=(self.font_family, 9))
+        host.pack(side="right")
         title = tk.Label(frame, text=task.get("title", "未命名待办"), bg=self.SURFACE, fg=self.INK,
                          font=(self.font_family, 12, "bold"), anchor="w", justify="left", wraplength=380)
         title.pack(fill="x", pady=(0, 9))
@@ -636,6 +723,7 @@ class CoindexApp:
         action = tk.Label(next_step, text=task.get("next_action") or "下一步尚未记录", bg=TOKENS["subtle"], fg=self.INK,
                           font=(self.font_family, 10), anchor="w", justify="left", wraplength=340)
         action.pack(side="left", fill="x", expand=True)
+        card.labels = {"badge": badge, "host": host, "title": title, "progress": progress, "action": action}
         def resize(event):
             title.configure(wraplength=max(150, event.width))
             progress.configure(wraplength=max(150, event.width))
@@ -651,9 +739,18 @@ class CoindexApp:
         card.bind("<Return>", select)
         card.bind("<space>", select)
         card.bind("<FocusIn>", lambda _e: card.set_outline(self.ACCENT))
-        card.bind("<FocusOut>", lambda _e: card.set_outline(self.ACCENT if selected else self.BORDER))
+        card.bind("<FocusOut>", lambda _e: card.set_outline(self.ACCENT if card.selected else self.BORDER))
         card.bind("<Enter>", lambda _e: card.set_outline(self.ACCENT))
-        card.bind("<Leave>", lambda _e: card.set_outline(self.ACCENT if selected else self.BORDER))
+        card.bind("<Leave>", lambda _e: card.set_outline(self.ACCENT if card.selected else self.BORDER))
+        return card
+
+    def _update_task_card(self, card, task):
+        ink, fill = self._badge_colors(task.get("kind"))
+        card.labels["badge"].configure(text=self._kind_label(task.get("kind")), fg=ink, bg=fill)
+        for name, value in (("host", self._host_label(task.get("host"))), ("title", task.get("title", "未命名待办")),
+                            ("progress", task.get("progress") or task.get("detail") or "暂无进展记录"),
+                            ("action", task.get("next_action") or "下一步尚未记录")):
+            card.labels[name].configure(text=value)
 
     def _select_task(self, task_id):
         self.selected_task = task_id
@@ -662,12 +759,29 @@ class CoindexApp:
     def _clear_detail(self):
         if not hasattr(self, "detail"):
             return
+        if self._detail_signature == (None,):
+            return
+        self._detail_signature = (None,)
         for child in self.detail_content.winfo_children():
             child.destroy()
         tk.Label(self.detail_content, text="选择一条事项查看详情", bg=self.SURFACE, fg=self.MUTED,
                  font=(self.font_family, 10)).pack(padx=8, pady=30)
 
     def _show_detail(self, task):
+        receipt = self._latest_nudge(task)
+        signature = (task["id"], tuple(task.get(k) for k in
+                     ("kind", "title", "status", "progress", "detail", "next_action", "evidence", "artifact", "conversation_title",
+                      "priority", "conversation_id", "thread_id")),
+                     self._host_label(task.get("host")), task.get("snoozed_until", 0) > time.time(),
+                     tuple((receipt or {}).get(k) for k in ("action_id", "status", "error", "attention")))
+        if signature == self._detail_signature:
+            return
+        same_task = self._detail_signature and self._detail_signature[0] == task["id"]
+        top = self.detail_canvas.canvasy(0) if same_task else 0
+        focused = self.root.focus_get()
+        focused_text = (focused.cget("text") if same_task and isinstance(focused, ttk.Button)
+                        and str(focused).startswith(str(self.detail_content) + ".") else None)
+        self._detail_signature = signature
         for child in self.detail_content.winfo_children():
             child.destroy()
         pane = self.detail_content
@@ -700,7 +814,6 @@ class CoindexApp:
             self._section(pane, "相关产物", task["artifact"])
         if task.get("conversation_title"):
             self._section(pane, "原对话", task["conversation_title"])
-        receipt = self._latest_nudge(task)
         pending_nudge = bool(receipt and receipt.get("status") in ("queued", "sending"))
         if receipt:
             self._section(pane, "最近催办", self._receipt_text(receipt))
@@ -730,6 +843,13 @@ class CoindexApp:
         if self.demo:
             for button in buttons:
                 button.configure(state="disabled")
+        self.detail_content.update_idletasks()
+        self._restore_canvas_y(self.detail_canvas, top)
+        if focused_text:
+            for button in buttons:
+                if button.cget("text") == focused_text and not button.instate(["disabled"]):
+                    button.focus_set()
+                    break
 
     def _section(self, parent, heading, text, accent=False):
         tk.Label(parent, text=heading, bg=self.SURFACE, fg=self.MUTED, font=(self.font_family, 9), anchor="w").pack(fill="x", pady=(18, 6))
@@ -857,7 +977,14 @@ class CoindexApp:
     def _render_conversations(self):
         if not hasattr(self, "conversations"):
             return
-        self.conversations.delete(*self.conversations.get_children())
+        tree = self.conversations
+        previous = list(tree.get_children())
+        selection, focused = tree.selection(), tree.focus()
+        top = tree.yview()[0] * len(previous)
+        index = min(int(top), len(previous) - 1) if previous else 0
+        anchor = previous[index] if previous else None
+        filter_changed = self._conversation_filter != self.conv_inactive_var.get()
+        self._conversation_filter = self.conv_inactive_var.get()
         self.conv_map = {}
         for conv in self.snapshot.get("conversations", []):
             if bool(conv.get("closed")) != self.conv_inactive_var.get():
@@ -865,8 +992,30 @@ class CoindexApp:
             title = conv.get("title") or "未命名对话"
             host = self._host_label(conv.get("host"))
             state = "已结束" if conv.get("closed") else {"running": "进行中", "idle": "等待推进", "stopped": "已停止"}.get(conv.get("execution_state"), "待整理")
-            item = self.conversations.insert("", "end", text=title, values=(host, state, self._age(conv.get("updated_at", 0))), iid=conv["id"])
-            self.conv_map[item] = conv
+            iid = conv["id"]
+            values = (host, state, self._age(conv.get("updated_at", 0)))
+            if not tree.exists(iid):
+                tree.insert("", "end", text=title, values=values, iid=iid)
+            elif tree.item(iid, "text") != title or tuple(tree.item(iid, "values")) != values:
+                tree.item(iid, text=title, values=values)
+            self.conv_map[iid] = conv
+        for iid in previous:
+            if iid not in self.conv_map:
+                tree.delete(iid)
+        wanted = list(self.conv_map)
+        if list(tree.get_children()) != wanted:
+            for index_in_tree, iid in enumerate(wanted):
+                tree.move(iid, "", index_in_tree)
+        if filter_changed or wanted != previous:
+            surviving = [iid for iid in selection if tree.exists(iid)]
+            if surviving:
+                tree.selection_set(surviving)
+            if focused and tree.exists(focused):
+                tree.focus(focused)
+            if not filter_changed and anchor in wanted:
+                tree.yview_moveto((wanted.index(anchor) + top - index) / len(wanted))
+            elif filter_changed:
+                tree.yview_moveto(0)
         self.close_conv_button.configure(text="恢复跟踪" if self.conv_inactive_var.get() else "结束跟踪")
 
     def _toggle_conversations(self):
