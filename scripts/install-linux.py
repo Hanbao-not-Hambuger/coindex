@@ -13,14 +13,19 @@ DESKTOP_MARKER = "# Managed by coindex install-linux.sh"
 
 def default_data_home():
     value = os.environ.get("XDG_DATA_HOME")
-    return Path(value).expanduser() if value else Path.home() / ".local/share"
+    candidate = Path(value).expanduser() if value else None
+    return candidate if candidate and candidate.is_absolute() else Path.home() / ".local/share"
 
 
 def desktop_quote(value):
     """Quote one .desktop Exec argument according to the Desktop Entry spec."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    escaped = escaped.replace("`", "\\`").replace("$", "\\$").replace("%", "%%")
-    return '"' + escaped + '"'
+    if any(character in value for character in ("\n", "\r", "\0")):
+        raise RuntimeError("Desktop launcher paths cannot contain newline or NUL characters")
+    # First quote one Exec argument, then escape the resulting string for the
+    # desktop-entry value parser. Backslashes therefore pass through both.
+    argument = value.replace("\\", "\\\\").replace('"', '\\"')
+    argument = argument.replace("`", "\\`").replace("$", "\\$").replace("%", "%%")
+    return ('"' + argument + '"').replace("\\", "\\\\")
 
 
 def managed_launcher(path, app_launcher):
@@ -47,16 +52,35 @@ def write_atomic(path, contents, mode=0o644):
             pass
 
 
+def is_managed_bundle(path):
+    if path.is_symlink() or not path.is_dir():
+        return False
+    try:
+        launcher = path / "coindex"
+        return (launcher.is_file() and not launcher.is_symlink() and
+                "# Managed by coindex build-linux.sh" in launcher.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        return False
+
+
 def replace_bundle(source, destination):
+    source = source.resolve()
+    destination = destination.absolute()
+    if destination.is_symlink():
+        raise RuntimeError("Refusing to replace a symbolic-link app directory: " + str(destination))
+    destination = destination.parent.resolve() / destination.name
+    if source == destination or source in destination.parents or destination in source.parents:
+        raise RuntimeError("Refusing to install a bundle into or around its source: " + str(source))
+    if destination.exists() and not is_managed_bundle(destination):
+        raise RuntimeError("Refusing to replace an unrecognized app directory: " + str(destination))
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".coindex-stage-", dir=str(destination.parent)))
     backup = destination.with_name(destination.name + ".previous")
     try:
         shutil.rmtree(stage)
         shutil.copytree(source, stage)
-        if destination.is_symlink():
-            raise RuntimeError("Refusing to replace a symbolic-link app directory: " + str(destination))
-        if backup.exists():
+        if backup.exists() or backup.is_symlink():
             raise RuntimeError("Refusing to replace an existing upgrade backup: " + str(backup))
         if destination.exists():
             destination.rename(backup)
@@ -90,10 +114,11 @@ def install(source, prefix, data_home):
     applications = data_home / "applications"
     desktop = applications / "org.coindex.desktop.desktop"
     icon = data_home / "icons/hicolor/512x512/apps/org.coindex.desktop.png"
+    desktop_exec = desktop_quote(str(launcher))
 
     # Check every fixed integration point before changing any of them.
     if launcher.exists() or launcher.is_symlink():
-        if not managed_launcher(launcher, installed_launcher / "coindex"):
+        if not managed_launcher(launcher, installed_launcher):
             raise RuntimeError("Refusing to overwrite an existing launcher: " + str(launcher))
     if desktop.exists() or desktop.is_symlink():
         try:
@@ -114,15 +139,18 @@ def install(source, prefix, data_home):
 
     desktop_text = "\n".join((
         "[Desktop Entry]", DESKTOP_MARKER, "Version=1.0", "Type=Application", "Name=coindex",
-        "Comment=Follow up on work delegated to Codex", "Exec=" + desktop_quote(str(launcher)),
-        "Icon=org.coindex.desktop", "Terminal=false", "Categories=Development;Utility;",
+        "Comment=Follow up on work delegated to Codex", "Exec=" + desktop_exec,
+        "Icon=org.coindex.desktop", "Terminal=false", "Categories=Development;",
         "StartupNotify=true", "", "",
     ))
     write_atomic(desktop, desktop_text)
     icon.parent.mkdir(parents=True, exist_ok=True)
-    icon_tmp = icon.with_name("." + icon.name + ".tmp")
+    fd, icon_tmp_name = tempfile.mkstemp(prefix="." + icon.name + ".", dir=str(icon.parent))
+    os.close(fd)
+    icon_tmp = Path(icon_tmp_name)
     try:
         shutil.copyfile(app_dir / "Resources/Brand/AppIcon.png", icon_tmp)
+        os.chmod(icon_tmp, 0o644)
         os.replace(icon_tmp, icon)
     finally:
         try:

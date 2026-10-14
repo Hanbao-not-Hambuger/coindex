@@ -43,9 +43,9 @@ jobs:
       - name: Install Tk and headless desktop tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-tk xvfb
+          sudo apt-get install -y python3-tk xvfb desktop-file-utils
       - name: Backend and Linux installer regression tests
-        run: python3 -m unittest discover -s tests -v
+        run: xvfb-run -a python3 -m unittest discover -s tests -v
       - name: Build Linux application bundle
         run: bash scripts/build-linux.sh
       - name: Install bundle in isolated user directories
@@ -53,5 +53,10 @@ jobs:
           export XDG_DATA_HOME="$RUNNER_TEMP/coindex-xdg-data"
           bash dist/coindex-linux/scripts/install-linux.sh --prefix "$RUNNER_TEMP/coindex-prefix"
           "$RUNNER_TEMP/coindex-prefix/bin/coindex" --help
+          desktop-file-validate "$XDG_DATA_HOME/applications/org.coindex.desktop.desktop"
       - name: Linux desktop smoke test
-        run: xvfb-run -a python3 linux/app.py --demo --data-dir "$RUNNER_TEMP/coindex-gui-smoke" --smoke-test
+        run: xvfb-run -a env XDG_DATA_HOME="$RUNNER_TEMP/coindex-xdg-data" "$RUNNER_TEMP/coindex-prefix/bin/coindex" --demo --data-dir "$RUNNER_TEMP/coindex-bundle-smoke" --smoke-test
+      - name: Public source and Linux bundle privacy check
+        run: python3 scripts/check-public-release.py --app dist/coindex-linux
+      - name: Source package
+        run: python3 scripts/package-source.py
