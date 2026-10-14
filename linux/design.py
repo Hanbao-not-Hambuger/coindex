@@ -5,20 +5,10 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
 
-
-TOKENS = {
-    "canvas": "#F8F9FC",
-    "surface": "#FFFFFF",
-    "sidebar": "#F2F3F7",
-    "subtle": "#F4F5F9",
-    "border": "#E3E5ED",
-    "ink": "#20222B",
-    "muted": "#737787",
-    "accent": "#5E6AD2",
-    "accent_wash": "#ECEEFD",
-    "success": "#2E8B65",
-    "warning": "#A76A28",
-}
+try:  # package import in the app, direct import in the standalone preview
+    from .palette import TOKENS
+except ImportError:
+    from palette import TOKENS
 
 
 def _system_font(root: tk.Misc) -> str:
@@ -37,6 +27,67 @@ def _system_font(root: tk.Misc) -> str:
         return tkfont.nametofont("TkDefaultFont", root=root).actual("-family")
     except tk.TclError:
         return "TkDefaultFont"
+
+
+def _rounded_image(root: tk.Misc, fill: str, border: str, focus: str | None = None,
+                   radius: int = 6) -> tk.PhotoImage:
+    """Rasterize a tiny rounded tile; ttk stretches its center while keeping corners."""
+    size = 24
+    image = tk.PhotoImage(master=root, width=size, height=size)
+
+    def inside(x: int, y: int, left: int, top: int, right: int, bottom: int, r: int) -> bool:
+        cx = min(max(x, left + r), right - r - 1)
+        cy = min(max(y, top + r), bottom - r - 1)
+        return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+
+    for y in range(size):
+        row: list[str | None] = []
+        for x in range(size):
+            if focus and inside(x, y, 0, 0, size, size, radius):
+                color = focus
+                if inside(x, y, 2, 2, size - 2, size - 2, max(1, radius - 2)):
+                    color = border if border != fill else focus
+                    if inside(x, y, 3, 3, size - 3, size - 3, max(1, radius - 3)):
+                        color = fill
+            elif inside(x, y, 0, 0, size, size, radius):
+                color = border
+                if inside(x, y, 1, 1, size - 1, size - 1, max(1, radius - 1)):
+                    color = fill
+            else:
+                color = None
+            row.append(color)
+        x = 0
+        while x < size:
+            color = row[x]
+            if color is None:
+                x += 1
+                continue
+            end = x + 1
+            while end < size and row[end] == color:
+                end += 1
+            image.put("{" + " ".join([color] * (end - x)) + "}", to=(x, y))
+            x = end
+    return image
+
+
+def _button_element(style: ttk.Style, root: tk.Misc, element: str, colors: dict[str, str],
+                    radius: int = 6) -> list[tk.PhotoImage]:
+    normal = colors["normal"]
+    border = colors.get("border", normal)
+    focus = colors.get("focus", TOKENS["accent"])
+    images = [
+        _rounded_image(root, normal, border, radius=radius),
+        _rounded_image(root, colors.get("active", normal), border, radius=radius),
+        _rounded_image(root, colors.get("pressed", normal), border, radius=radius),
+        _rounded_image(root, colors.get("disabled", TOKENS["subtle"]),
+                       colors.get("disabled_border", TOKENS["border"]), radius=radius),
+        _rounded_image(root, normal, border, focus=focus, radius=radius),
+    ]
+    style.element_create(element, "image", images[0],
+                         ("disabled", images[3]), ("focus", images[4]),
+                         ("pressed", images[2]), ("active", images[1]),
+                         border=(8, 8, 8, 8), sticky="nsew")
+    return images
 
 
 def apply_theme(root: tk.Misc) -> str:
@@ -72,6 +123,13 @@ def apply_theme(root: tk.Misc) -> str:
                     darkcolor=TOKENS["border"], padding=(9, 7), relief="flat")
     style.map("TEntry", bordercolor=[("focus", TOKENS["accent"])],
               lightcolor=[("focus", TOKENS["accent"])], darkcolor=[("focus", TOKENS["accent"])])
+    style.configure("Search.TEntry", fieldbackground=TOKENS["surface"], foreground=TOKENS["ink"],
+                    insertcolor=TOKENS["ink"], bordercolor=TOKENS["surface"],
+                    lightcolor=TOKENS["surface"], darkcolor=TOKENS["surface"],
+                    borderwidth=0, padding=0, relief="flat")
+    style.layout("Search.TEntry", [("Entry.field", {"sticky": "nswe", "children": [
+        ("Entry.padding", {"sticky": "nswe", "children": [
+            ("Entry.textarea", {"sticky": "nswe"})]})]})])
     style.configure("TCombobox", fieldbackground=TOKENS["surface"], background=TOKENS["surface"],
                     foreground=TOKENS["ink"], arrowcolor=TOKENS["muted"], bordercolor=TOKENS["border"],
                     lightcolor=TOKENS["border"], darkcolor=TOKENS["border"], padding=(8, 6), relief="flat")
@@ -80,40 +138,47 @@ def apply_theme(root: tk.Misc) -> str:
               selectforeground=[("readonly", TOKENS["ink"])],
               bordercolor=[("focus", TOKENS["accent"])], lightcolor=[("focus", TOKENS["accent"])])
 
-    button_base = {"font": (family, 10, "bold"), "padding": (12, 7), "relief": "flat",
-                   "borderwidth": 1, "focuscolor": TOKENS["accent"]}
-    style.configure("TButton", **button_base, background=TOKENS["surface"], foreground=TOKENS["ink"],
-                    bordercolor=TOKENS["border"])
-    style.map("TButton", background=[("disabled", TOKENS["subtle"]), ("pressed", TOKENS["subtle"]),
-                                      ("active", TOKENS["subtle"])],
-              foreground=[("disabled", TOKENS["muted"])],
-              bordercolor=[("focus", TOKENS["accent"])])
-    style.configure("Accent.TButton", **button_base, background=TOKENS["accent"],
-                    foreground=TOKENS["surface"], bordercolor=TOKENS["accent"])
-    style.map("Accent.TButton", background=[("disabled", TOKENS["subtle"]),
-                                             ("pressed", "#4E59BC"), ("active", "#707BE0")],
-              foreground=[("disabled", TOKENS["muted"])],
-              bordercolor=[("focus", TOKENS["accent"])])
-    style.configure("Quiet.TButton", **button_base, background=TOKENS["subtle"],
-                    foreground=TOKENS["ink"], bordercolor=TOKENS["subtle"])
-    style.map("Quiet.TButton", background=[("disabled", TOKENS["subtle"]),
-                                            ("pressed", TOKENS["border"]), ("active", TOKENS["accent_wash"])],
-              foreground=[("disabled", TOKENS["muted"])], bordercolor=[("focus", TOKENS["accent"])])
-    style.configure("Danger.TButton", **button_base, background=TOKENS["surface"],
-                    foreground="#B74343", bordercolor=TOKENS["border"])
-    style.map("Danger.TButton", background=[("disabled", TOKENS["subtle"]),
-                                             ("pressed", "#F9EAEA"), ("active", "#FCEFEF")],
-              foreground=[("disabled", TOKENS["muted"])], bordercolor=[("focus", "#B74343")])
-    style.configure("Nav.TButton", font=(family, 10), background=TOKENS["sidebar"],
-                    foreground=TOKENS["muted"], borderwidth=0, padding=(10, 7), anchor="w", relief="flat")
-    style.map("Nav.TButton", background=[("disabled", TOKENS["sidebar"]),
-                                          ("pressed", TOKENS["accent_wash"]), ("active", TOKENS["subtle"])],
-              foreground=[("disabled", TOKENS["muted"])])
-    style.configure("Selected.Nav.TButton", font=(family, 10, "bold"), background=TOKENS["accent_wash"],
-                    foreground=TOKENS["accent"], borderwidth=0, padding=(10, 7), anchor="w", relief="flat")
-    style.map("Selected.Nav.TButton", background=[("disabled", TOKENS["accent_wash"]),
-                                                   ("pressed", TOKENS["accent_wash"]),
-                                                   ("active", TOKENS["accent_wash"])])
+    if not hasattr(root, "_coindex_button_images"):
+        root._coindex_button_images = []
+    button_specs = {
+        "TButton": {"normal": TOKENS["surface"], "border": TOKENS["border"],
+                    "active": TOKENS["subtle"], "pressed": TOKENS["accent_wash"]},
+        "Accent.TButton": {"normal": TOKENS["accent"], "border": TOKENS["accent"],
+                           "active": "#707BE0", "pressed": "#4E59BC",
+                           "disabled": TOKENS["subtle"], "focus": TOKENS["surface"]},
+        "Quiet.TButton": {"normal": TOKENS["subtle"], "border": TOKENS["subtle"],
+                          "active": TOKENS["accent_wash"], "pressed": TOKENS["border"]},
+        "Danger.TButton": {"normal": TOKENS["surface"], "border": TOKENS["border"],
+                           "active": "#FCEFEF", "pressed": "#F9EAEA"},
+        "Nav.TButton": {"normal": TOKENS["sidebar"], "border": TOKENS["sidebar"],
+                        "active": TOKENS["subtle"], "pressed": TOKENS["accent_wash"]},
+        "Selected.Nav.TButton": {"normal": TOKENS["accent_wash"], "border": TOKENS["accent_wash"],
+                                 "active": TOKENS["accent_wash"], "pressed": TOKENS["accent_wash"]},
+    }
+    foregrounds = {
+        "TButton": TOKENS["ink"], "Accent.TButton": TOKENS["surface"],
+        "Quiet.TButton": TOKENS["ink"], "Danger.TButton": "#B74343",
+        "Nav.TButton": TOKENS["muted"], "Selected.Nav.TButton": TOKENS["accent"],
+    }
+    button_base = {"font": (family, 10, "bold"), "padding": (12, 7),
+                   "borderwidth": 0, "focuscolor": TOKENS["accent"]}
+    for button_style, colors in button_specs.items():
+        element = "Coindex." + button_style.replace(".", "_") + ".button"
+        if element not in style.element_names():
+            root._coindex_button_images.extend(_button_element(style, root, element, colors,
+                                                               radius=5 if "Nav" in button_style else 6))
+        style.layout(button_style, [(element, {"sticky": "nswe", "children": [
+            ("Button.padding", {"sticky": "nswe", "children": [
+                ("Button.label", {"sticky": "nswe"})]})]})])
+        style.configure(button_style, **button_base, background=colors["normal"],
+                        foreground=foregrounds[button_style])
+        style.map(button_style, background=[("disabled", colors.get("disabled", TOKENS["subtle"])),
+                                            ("pressed", colors.get("pressed", colors["normal"])),
+                                            ("active", colors.get("active", colors["normal"]))],
+                  foreground=[("disabled", TOKENS["muted"])])
+    for button_style in ("Nav.TButton", "Selected.Nav.TButton"):
+        style.configure(button_style, font=(family, 10, "bold" if button_style.startswith("Selected") else "normal"),
+                        padding=(10, 7), anchor="w")
 
     for name in ("TCheckbutton", "TRadiobutton"):
         style.configure(name, font=default, background=TOKENS["canvas"], foreground=TOKENS["ink"],
