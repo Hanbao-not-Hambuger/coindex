@@ -24,7 +24,7 @@ def _system_font(root: tk.Misc) -> str:
         if family in available:
             return family
     try:
-        return tkfont.nametofont("TkDefaultFont", root=root).actual("-family")
+        return tkfont.nametofont("TkDefaultFont", root=root).actual("family")
     except tk.TclError:
         return "TkDefaultFont"
 
@@ -84,8 +84,8 @@ def _button_element(style: ttk.Style, root: tk.Misc, element: str, colors: dict[
         _rounded_image(root, normal, border, focus=focus, radius=radius),
     ]
     style.element_create(element, "image", images[0],
-                         ("disabled", images[3]), ("focus", images[4]),
-                         ("pressed", images[2]), ("active", images[1]),
+                         ("disabled", images[3]), ("pressed", images[2]),
+                         ("focus", images[4]), ("active", images[1]),
                          border=(8, 8, 8, 8), sticky="nsew")
     return images
 
@@ -186,6 +186,8 @@ def apply_theme(root: tk.Misc) -> str:
         style.map(name, background=[("active", TOKENS["canvas"])],
                   foreground=[("disabled", TOKENS["muted"])],
                   indicatorcolor=[("selected", TOKENS["accent"]), ("disabled", TOKENS["subtle"])])
+    style.configure("Panel.TCheckbutton", background=TOKENS["surface"])
+    style.map("Panel.TCheckbutton", background=[("active", TOKENS["surface"])])
 
     style.configure("Treeview", font=default, rowheight=40, background=TOKENS["surface"],
                     fieldbackground=TOKENS["surface"], foreground=TOKENS["ink"],
@@ -227,16 +229,28 @@ class RoundedPanel(tk.Canvas):
         self._window = self.create_window(padding, padding, anchor="nw", window=self.body)
         self.bind("<Configure>", self._resize, add="+")
         self.body.bind("<Configure>", self._body_changed, add="+")
-        self.after_idle(self._sync_size)
+        self._idle = None
+        self.bind("<Destroy>", self._destroy, add="+")
+        self._schedule_sync()
 
     def set_outline(self, color: str) -> None:
         self.outline = color
         self.itemconfigure(self._shape, outline=color)
 
     def _body_changed(self, _event=None) -> None:
-        self.after_idle(self._sync_size)
+        self._schedule_sync()
+
+    def _schedule_sync(self) -> None:
+        if self._idle is None:
+            self._idle = self.after_idle(self._sync_size)
+
+    def _destroy(self, event) -> None:
+        if event.widget is self and self._idle is not None:
+            self.after_cancel(self._idle)
+            self._idle = None
 
     def _sync_size(self) -> None:
+        self._idle = None
         try:
             height = max(1, self.body.winfo_reqheight() + self.padding * 2)
             if int(float(self.cget("height"))) != height:

@@ -27,6 +27,16 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from platform_paths import default_data_dir
+try:
+    from .palette import TOKENS
+except ImportError:
+    from palette import TOKENS
+if tk is not None:
+    try:
+        from .design import apply_theme, RoundedPanel, Icon
+    except ImportError:  # Direct script entry point.
+        from design import apply_theme, RoundedPanel, Icon
+
 
 
 def demo_snapshot():
@@ -198,8 +208,8 @@ class StdioClient:
 
 
 class CoindexApp:
-    BG, SURFACE, SIDEBAR = "#F7F8FA", "#FFFFFF", "#EFF0F4"
-    BORDER, INK, MUTED, ACCENT = "#E1E3EB", "#20212B", "#676A79", "#555FC9"
+    BG, SURFACE, SIDEBAR = TOKENS["canvas"], TOKENS["surface"], TOKENS["sidebar"]
+    BORDER, INK, MUTED, ACCENT = TOKENS["border"], TOKENS["ink"], TOKENS["muted"], TOKENS["accent"]
 
     def __init__(self, root, data_dir=None, demo=False, client_factory=StdioClient, demo_data=None, smoke_test=False):
         self.root, self.demo = root, demo
@@ -253,77 +263,98 @@ class CoindexApp:
             self.root.destroy()
 
     def _build(self):
-        self.root.title("coindex")
-        self.root.geometry("1200x820")
-        self.root.minsize(960, 660)
+        self.root.title("coindex · 演示" if self.demo else "coindex")
+        self.root.geometry("1240x820")
+        self.root.minsize(1000, 680)
         self.root.configure(bg=self.BG)
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        style.configure("TFrame", background=self.BG)
-        style.configure("Panel.TFrame", background=self.SURFACE)
-        style.configure("TLabel", background=self.BG, foreground=self.INK, font=("Sans", 10))
-        style.configure("Muted.TLabel", foreground=self.MUTED)
-        style.configure("Title.TLabel", font=("Sans", 21, "bold"))
-        style.configure("Task.TLabel", background=self.SURFACE, font=("Sans", 12, "bold"))
-        style.configure("TButton", padding=(9, 5))
-        style.configure("Accent.TButton", background=self.ACCENT, foreground="#FFFFFF")
-        style.map("Accent.TButton", background=[("active", "#464FB5")])
-        style.configure("TEntry", padding=6)
+        self.font_family = apply_theme(self.root)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
-
-        shell = ttk.Frame(self.root)
+        self.root.bind("<Destroy>", self._destroyed, add=True)
+        self.root.bind("<Control-f>", lambda _e: self.search_entry.focus_set())
+        self.root.bind("<Control-n>", lambda _e: self.new_task())
+        shell = tk.Frame(self.root, bg=self.BG)
         shell.pack(fill="both", expand=True)
-        sidebar = tk.Frame(shell, bg=self.SIDEBAR, width=220, highlightthickness=1, highlightbackground=self.BORDER)
+        sidebar = tk.Frame(shell, bg=self.SIDEBAR, width=208)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
-        tk.Label(sidebar, text="coindex", bg=self.SIDEBAR, fg=self.INK, font=("Sans", 19, "bold")).pack(anchor="w", padx=20, pady=(22, 26))
-        self.nav_tasks = ttk.Button(sidebar, text="▣  待办", command=lambda: self._switch("tasks"))
-        self.nav_tasks.pack(fill="x", padx=12, pady=3)
-        self.nav_convs = ttk.Button(sidebar, text="◷  对话", command=lambda: self._switch("conversations"))
-        self.nav_convs.pack(fill="x", padx=12, pady=3)
-        self.settings_button = ttk.Button(sidebar, text="⚙  设置", command=self.open_settings)
-        self.settings_button.pack(fill="x", padx=12, pady=(3, 3))
-        self.sidebar_status = tk.Label(sidebar, text="服务连接中…", bg=self.SIDEBAR, fg=self.MUTED,
-                                       justify="left", wraplength=185, font=("Sans", 9))
-        self.sidebar_status.pack(side="bottom", anchor="w", padx=18, pady=18)
+        tk.Frame(shell, bg=self.BORDER, width=1).pack(side="left", fill="y")
+        brand = tk.Frame(sidebar, bg=self.SIDEBAR)
+        brand.pack(fill="x", padx=20, pady=(28, 30))
+        icon_path = ROOT / "Resources/Brand/AppIcon.png"
+        if icon_path.is_file():
+            original = tk.PhotoImage(file=str(icon_path))
+            self.brand_image = original.subsample(max(1, original.width() // 30))
+            tk.Label(brand, image=self.brand_image, bg=self.SIDEBAR).pack(side="left", padx=(0, 9))
+        tk.Label(brand, text="coindex", bg=self.SIDEBAR, fg=self.INK,
+                 font=(self.font_family, 17, "bold")).pack(side="left")
+        tk.Label(sidebar, text="工作空间", bg=self.SIDEBAR, fg=self.MUTED,
+                 font=(self.font_family, 9)).pack(anchor="w", padx=22, pady=(0, 8))
+        self.nav_tasks = ttk.Button(sidebar, text="所有待办", style="Selected.Nav.TButton", command=lambda: self._choose_kind("全部类型"))
+        self.nav_tasks.pack(fill="x", padx=10, pady=2)
+        self.category_buttons = {}
+        for label, kind in (("进行中", "进行中"), ("结果校对", "结果校对"), ("继续推进", "继续"),
+                            ("等待结果", "等待"), ("需要决定", "决策"), ("手动待办", "手动")):
+            button = ttk.Button(sidebar, text=label, style="Nav.TButton", command=lambda k=kind: self._choose_kind(k))
+            button.pack(fill="x", padx=10, pady=1)
+            self.category_buttons[kind] = (button, label)
+        self.history_button = ttk.Button(sidebar, text="已完成 / 稍后", style="Nav.TButton", command=self._choose_history)
+        self.history_button.pack(fill="x", padx=10, pady=(10, 1))
+        tk.Frame(sidebar, height=1, bg=self.BORDER).pack(fill="x", padx=18, pady=18)
+        self.nav_convs = ttk.Button(sidebar, text="所有对话", style="Nav.TButton", command=lambda: self._switch("conversations"))
+        self.nav_convs.pack(fill="x", padx=10, pady=2)
+        footer = tk.Frame(sidebar, bg=self.SIDEBAR)
+        footer.pack(side="bottom", fill="x", padx=16, pady=18)
+        self.settings_button = ttk.Button(footer, text="偏好设置", style="Nav.TButton", command=self.open_settings)
+        self.settings_button.pack(fill="x", pady=(0, 12))
+        self.sidebar_status = tk.Label(footer, text="正在连接…", bg=self.SIDEBAR, fg=self.MUTED,
+                                       justify="left", wraplength=174, font=(self.font_family, 9))
+        self.sidebar_status.pack(anchor="w", padx=6)
+        self.workday_button = ttk.Button(footer, text="下班", style="Quiet.TButton", command=self.toggle_workday)
+        self.workday_button.pack(anchor="w", pady=(10, 0))
 
-        content = ttk.Frame(shell, padding=(24, 20, 24, 18))
+        content = ttk.Frame(shell, padding=(28, 26, 24, 20))
         content.pack(side="left", fill="both", expand=True)
         header = ttk.Frame(content)
-        header.pack(fill="x", pady=(0, 16))
-        self.heading_var = tk.StringVar(value="待办")
+        header.pack(fill="x", pady=(0, 6))
+        self.heading_var = tk.StringVar(value="所有待办")
         ttk.Label(header, textvariable=self.heading_var, style="Title.TLabel").pack(side="left")
-        self.status_var = tk.StringVar(value="")
-        ttk.Label(header, textvariable=self.status_var, style="Muted.TLabel", wraplength=300).pack(side="left", padx=16, pady=(7, 0))
         self.primary_button = ttk.Button(header, text="＋ 新建待办", style="Accent.TButton", command=self.new_task)
         self.primary_button.pack(side="right")
         self.update_button = ttk.Button(header, text="更新", command=self.manual_sync)
         self.update_button.pack(side="right", padx=(0, 8))
-        self.stop_button = ttk.Button(header, text="中止更新", command=self.cancel_sync)
-        self.workday_button = ttk.Button(header, text="下班", command=self.toggle_workday)
-        self.workday_button.pack(side="right", padx=(0, 8))
+        self.stop_button = ttk.Button(header, text="中止更新", style="Danger.TButton", command=self.cancel_sync)
+        self.summary_var = tk.StringVar(value="把每件事的进展和下一步放在一起。")
+        ttk.Label(content, textvariable=self.summary_var, style="Muted.TLabel").pack(anchor="w", pady=(2, 20))
+        self.status_var = tk.StringVar(value="")
+        self.status_line = ttk.Label(content, textvariable=self.status_var, style="Muted.TLabel", wraplength=860)
+        self.status_line.pack(side="bottom", anchor="w", fill="x", pady=(12, 0))
 
-        self.task_filters = ttk.Frame(content)
-        self.task_filters.pack(fill="x", pady=(0, 10))
         self.search_var = tk.StringVar()
-        search = ttk.Entry(self.task_filters, textvariable=self.search_var, width=28)
-        search.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        search.insert(0, "")
-        self.search_var.trace_add("write", lambda *_: self._render_tasks())
         self.kind_var = tk.StringVar(value="全部类型")
-        self.kind_box = ttk.Combobox(self.task_filters, textvariable=self.kind_var, values=("全部类型", "结果校对", "继续", "等待", "决策", "进行中", "手动"), state="readonly", width=11)
-        self.kind_box.pack(side="left", padx=4)
-        self.kind_box.bind("<<ComboboxSelected>>", lambda _e: self._render_tasks())
         self.host_var = tk.StringVar(value="全部来源")
-        self.host_box = ttk.Combobox(self.task_filters, textvariable=self.host_var, values=("全部来源",), state="readonly", width=14)
-        self.host_box.pack(side="left", padx=4)
-        self.host_box.bind("<<ComboboxSelected>>", lambda _e: self._render_tasks())
         self.inactive_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self.task_filters, text="已完成 / 稍后", variable=self.inactive_var, command=self._toggle_inactive).pack(side="left", padx=(8, 0))
-
+        self.task_filters = ttk.Frame(content)
+        self.task_filters.pack(fill="x", pady=(0, 18))
+        search_wrap = tk.Frame(self.task_filters, bg=self.SURFACE, highlightthickness=1,
+                               highlightbackground=self.BORDER, padx=10, pady=5)
+        search_wrap.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        Icon(search_wrap, "search", bg=self.SURFACE, color=self.MUTED).pack(side="left", padx=(0, 8))
+        self.search_entry = ttk.Entry(search_wrap, textvariable=self.search_var, style="Search.TEntry")
+        self.search_entry.pack(side="left", fill="x", expand=True)
+        self.search_entry.bind("<FocusIn>", lambda _e: search_wrap.configure(highlightbackground=self.ACCENT))
+        self.search_entry.bind("<FocusOut>", lambda _e: search_wrap.configure(highlightbackground=self.BORDER))
+        self.search_hint = tk.Label(self.search_entry, text="搜索标题、进度或对话", bg=self.SURFACE, fg=self.MUTED,
+                                    font=(self.font_family, 10), cursor="xterm")
+        self.search_hint.place(x=3, rely=.5, anchor="w")
+        self.search_hint.bind("<Button-1>", lambda _e: self.search_entry.focus_set())
+        self.search_entry.bind("<FocusIn>", lambda _e: self.search_hint.place_forget(), add=True)
+        self.search_entry.bind("<FocusOut>", lambda _e: self._search_placeholder(), add=True)
+        self.search_var.trace_add("write", lambda *_: (self._search_placeholder(), self._render_tasks()))
+        self.host_box = ttk.Combobox(self.task_filters, textvariable=self.host_var, values=("全部来源",), state="readonly", width=15)
+        self.host_box.pack(side="right", ipady=4)
+        self.host_box.bind("<<ComboboxSelected>>", lambda _e: self._render_tasks())
+        self.result_label = ttk.Label(content, style="Caption.TLabel")
+        self.result_label.pack(anchor="w", pady=(0, 10))
         self.task_page = ttk.Frame(content)
         self.conversation_page = ttk.Frame(content)
         self.task_page.pack(fill="both", expand=True)
@@ -344,15 +375,15 @@ class CoindexApp:
         self.root.bind_all("<MouseWheel>", self._wheel)
         self.root.bind_all("<Button-4>", self._wheel)
         self.root.bind_all("<Button-5>", self._wheel)
-        self.detail = tk.Frame(task_split, bg=self.SURFACE, width=360, highlightthickness=1, highlightbackground=self.BORDER)
-        self.detail.pack(side="right", fill="y", padx=(14, 0))
+        self.detail = tk.Frame(task_split, bg=self.SURFACE, width=340, highlightthickness=1, highlightbackground=self.BORDER)
+        self.detail.pack(side="right", fill="y", padx=(20, 0))
         self.detail.pack_propagate(False)
         self.detail_canvas = tk.Canvas(self.detail, bg=self.SURFACE, highlightthickness=0, takefocus=True)
         self.detail_scroll = ttk.Scrollbar(self.detail, orient="vertical", command=self.detail_canvas.yview)
         self.detail_canvas.configure(yscrollcommand=self.detail_scroll.set)
         self.detail_canvas.pack(side="left", fill="both", expand=True)
         self.detail_scroll.pack(side="right", fill="y")
-        self.detail_content = tk.Frame(self.detail_canvas, bg=self.SURFACE, padx=18, pady=18)
+        self.detail_content = tk.Frame(self.detail_canvas, bg=self.SURFACE, padx=20, pady=22)
         self.detail_window = self.detail_canvas.create_window((0, 0), window=self.detail_content, anchor="nw")
         self.detail_content.bind("<Configure>", lambda _e: self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all")))
         self.detail_canvas.bind("<Configure>", lambda e: self.detail_canvas.itemconfigure(self.detail_window, width=e.width))
@@ -361,32 +392,59 @@ class CoindexApp:
         self.detail_canvas.bind("<Down>", lambda _e: self.detail_canvas.yview_scroll(1, "units"))
         self._clear_detail()
 
-        self.conversation_page.pack_forget()
         self.conversations = ttk.Treeview(self.conversation_page, columns=("host", "state", "updated"), show="tree headings", selectmode="browse")
-        self.conversations.heading("#0", text="对话")
-        self.conversations.heading("host", text="来源")
-        self.conversations.heading("state", text="状态")
-        self.conversations.heading("updated", text="最近更新")
-        self.conversations.column("#0", width=500)
-        self.conversations.column("host", width=140)
-        self.conversations.column("state", width=120)
-        self.conversations.column("updated", width=160)
+        for name, label, width in (("#0", "对话", 340), ("host", "来源", 130), ("state", "状态", 110), ("updated", "最近更新", 140)):
+            self.conversations.heading(name, text=label, anchor="w")
+            self.conversations.column(name, width=width, minwidth=80, stretch=name == "#0")
         conv_list = ttk.Frame(self.conversation_page)
-        conv_list.pack(fill="both", expand=True, pady=(0, 10))
+        conv_list.pack(fill="both", expand=True, pady=(0, 14))
         self.conversations.pack(in_=conv_list, side="left", fill="both", expand=True)
         conv_scroll = ttk.Scrollbar(conv_list, orient="vertical", command=self.conversations.yview)
         conv_scroll.pack(side="right", fill="y")
         self.conversations.configure(yscrollcommand=conv_scroll.set)
         self.conv_inactive_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self.conversation_page, text="显示已结束对话", variable=self.conv_inactive_var,
-                        command=self._toggle_conversations).pack(anchor="w", pady=(0, 8))
         actions = ttk.Frame(self.conversation_page)
         actions.pack(fill="x")
+        ttk.Checkbutton(actions, text="显示已结束对话", variable=self.conv_inactive_var,
+                        command=self._toggle_conversations).pack(side="left")
         self.open_conv_button = ttk.Button(actions, text="打开对话", command=self.open_conversation)
-        self.open_conv_button.pack(side="left")
-        self.close_conv_button = ttk.Button(actions, text="结束对话", command=self.toggle_conversation)
-        self.close_conv_button.pack(side="left", padx=8)
+        self.open_conv_button.pack(side="right")
+        self.close_conv_button = ttk.Button(actions, text="结束跟踪", style="Quiet.TButton", command=self.toggle_conversation)
+        self.close_conv_button.pack(side="right", padx=8)
         self._disable_mutations()
+
+    def _search_placeholder(self):
+        if not hasattr(self, "search_hint"):
+            return
+        if self.search_var.get() or self.root.focus_get() == self.search_entry:
+            self.search_hint.place_forget()
+        else:
+            self.search_hint.place(x=3, rely=.5, anchor="w")
+
+    def _choose_kind(self, kind):
+        self.kind_var.set(kind)
+        self.inactive_var.set(False)
+        self.show_inactive = False
+        self._switch("tasks")
+
+    def _choose_history(self):
+        self.kind_var.set("全部类型")
+        self.inactive_var.set(True)
+        self.show_inactive = True
+        self._switch("tasks")
+
+    def _refresh_navigation(self):
+        now = time.time()
+        tasks = self.snapshot.get("tasks", [])
+        active = [t for t in tasks if t.get("status", "open") == "open" and t.get("snoozed_until", 0) <= now]
+        all_selected = self.tab == "tasks" and not self.show_inactive and self.kind_var.get() == "全部类型"
+        self.nav_tasks.configure(text="所有待办    %d" % len(active), style="Selected.Nav.TButton" if all_selected else "Nav.TButton")
+        for kind, (button, label) in self.category_buttons.items():
+            count = sum(self._kind_label(t.get("kind")) == kind for t in active)
+            selected = self.tab == "tasks" and not self.show_inactive and self.kind_var.get() == kind
+            button.configure(text="%s    %d" % (label, count), style="Selected.Nav.TButton" if selected else "Nav.TButton")
+        self.history_button.configure(style="Selected.Nav.TButton" if self.tab == "tasks" and self.show_inactive else "Nav.TButton")
+        self.nav_convs.configure(style="Selected.Nav.TButton" if self.tab == "conversations" else "Nav.TButton")
 
     def _disable_mutations(self):
         if self.demo:
@@ -477,6 +535,7 @@ class CoindexApp:
             self.host_var.set("全部来源")
         self._render_tasks()
         self._render_conversations()
+        self._refresh_navigation()
 
     def _kind_label(self, kind):
         return {"review": "结果校对", "continue": "继续", "wait": "等待", "decision": "决策", "manual": "手动", "running": "进行中"}.get(kind, kind or "任务")
@@ -506,37 +565,95 @@ class CoindexApp:
                 continue
             rows.append(task)
         self.visible_task_ids = [t["id"] for t in rows]
-        self.selected_task = self.selected_task if self.selected_task in by_id else None
+        self.selected_task = self.selected_task if self.selected_task in self.visible_task_ids else (rows[0]["id"] if rows else None)
         self.result_count = len(rows)
+        self.result_label.configure(text="%d 项%s" % (len(rows), "历史事项" if self.show_inactive else "待跟进事项"))
         for task in rows:
             self._task_card(task, selected=task["id"] == self.selected_task)
         if not rows:
-            tk.Label(self.cards, text="没有匹配的待办", bg=self.BG, fg=self.MUTED, font=("Sans", 13)).pack(anchor="w", padx=18, pady=28)
+            empty = tk.Frame(self.cards, bg=self.BG, pady=56)
+            empty.pack(fill="both", expand=True)
+            Icon(empty, "check" if not search else "search", size=36, color=self.ACCENT, bg=self.BG).pack(pady=(0, 18))
+            tk.Label(empty, text="暂时没有匹配的事项" if search else "给每件事一个下一步", bg=self.BG, fg=self.INK,
+                     font=(self.font_family, 15, "bold")).pack()
+            tk.Label(empty, text="试试其他关键词或清除筛选。" if search else "更新对话，或添加一件需要跟进的事。", bg=self.BG,
+                     fg=self.MUTED, font=(self.font_family, 10)).pack(pady=(10, 18))
+            if search or chosen_kind != "全部类型" or chosen_host != "全部来源" or self.show_inactive:
+                ttk.Button(empty, text="清除筛选", command=self._clear_filters).pack()
+            elif not self.demo:
+                ttk.Button(empty, text="新建待办", style="Accent.TButton", command=self.new_task).pack()
+            self.detail.pack_forget()
+        elif not self.detail.winfo_manager():
+            self.detail.pack(side="right", fill="y", padx=(20, 0))
         if self.selected_task:
             self._show_detail(by_id[self.selected_task])
         else:
             self._clear_detail()
+        self._refresh_navigation()
+        if self.tab == "tasks":
+            sources = len({t.get("host") for t in rows if t.get("host") not in (None, "manual")})
+            self.summary_var.set("%d 件事项 · %d 个来源 · 进展与下一步，一目了然。" % (len(rows), sources))
+
+    def _clear_filters(self):
+        self.search_var.set("")
+        self.host_var.set("全部来源")
+        self._choose_kind("全部类型")
+
+    def _host_label(self, host):
+        if host == "mac":
+            return "本机"
+        if host == "manual":
+            return "手动"
+        return next((h.get("name") or host for h in self.snapshot.get("hosts", []) if h["id"] == host), host or "未知来源")
+
+    def _badge(self, parent, kind):
+        colors = {"review": (self.ACCENT, TOKENS["accent_wash"]), "running": ("#2F7298", "#EAF3F9"),
+                  "continue": ("#93672C", "#FAF1E2"), "decision": ("#79539D", "#F2ECF8")}
+        ink, fill = colors.get(kind, (self.MUTED, TOKENS["subtle"]))
+        badge = tk.Label(parent, text=self._kind_label(kind), bg=fill, fg=ink,
+                         font=(self.font_family, 9), padx=7, pady=2)
+        return badge
 
     def _task_card(self, task, selected=False):
-        frame = tk.Frame(self.cards, bg=self.SURFACE, highlightthickness=2 if selected else 1,
-                         highlightbackground=self.ACCENT if selected else self.BORDER, padx=14, pady=12)
-        frame.pack(fill="x", pady=(0, 10), padx=(1, 7))
+        card = RoundedPanel(self.cards, fill=self.SURFACE, outline=self.ACCENT if selected else self.BORDER,
+                            radius=12, padding=16, takefocus=True, cursor="hand2")
+        card.pack(fill="x", pady=(0, 12), padx=(1, 7))
+        frame = card.body
+        meta = tk.Frame(frame, bg=self.SURFACE)
+        meta.pack(fill="x", pady=(0, 9))
+        self._badge(meta, task.get("kind")).pack(side="left")
+        tk.Label(meta, text=self._host_label(task.get("host")), bg=self.SURFACE, fg=self.MUTED,
+                 font=(self.font_family, 9)).pack(side="right")
         title = tk.Label(frame, text=task.get("title", "未命名待办"), bg=self.SURFACE, fg=self.INK,
-                         font=("Sans", 12, "bold"), anchor="w", justify="left", wraplength=430)
-        title.pack(fill="x")
-        meta = "%s · %s" % (self._kind_label(task.get("kind")), "本机 / Linux" if task.get("host") == "mac" else task.get("host", ""))
-        tk.Label(frame, text=meta, bg=self.SURFACE, fg=self.MUTED, font=("Sans", 9), anchor="w").pack(fill="x", pady=(3, 7))
-        tk.Label(frame, text=task.get("progress") or task.get("detail") or "暂无进展记录", bg="#F2F3F7", fg=self.INK,
-                 font=("Sans", 10), anchor="w", justify="left", wraplength=430, padx=9, pady=7).pack(fill="x")
-        tk.Label(frame, text="下一步  " + (task.get("next_action") or "尚未记录"), bg=self.SURFACE, fg=self.MUTED,
-                 font=("Sans", 9), anchor="w", justify="left", wraplength=430).pack(fill="x", pady=(7, 0))
-        for widget in (frame, title):
-            widget.bind("<Button-1>", lambda _e, tid=task["id"]: self._select_task(tid))
-            widget.bind("<Enter>", lambda _e, f=frame: f.configure(highlightbackground=self.ACCENT))
-            widget.bind("<Leave>", lambda _e, f=frame, sel=selected: f.configure(highlightbackground=self.ACCENT if sel else self.BORDER))
-        for child in frame.winfo_children():
-            if isinstance(child, tk.Label):
-                child.bind("<Button-1>", lambda _e, tid=task["id"]: self._select_task(tid))
+                         font=(self.font_family, 12, "bold"), anchor="w", justify="left", wraplength=380)
+        title.pack(fill="x", pady=(0, 9))
+        progress = tk.Label(frame, text=task.get("progress") or task.get("detail") or "暂无进展记录", bg=self.SURFACE, fg=self.MUTED,
+                            font=(self.font_family, 10), anchor="w", justify="left", wraplength=380)
+        progress.pack(fill="x", pady=(0, 12))
+        next_step = tk.Frame(frame, bg=TOKENS["subtle"], padx=10, pady=9)
+        next_step.pack(fill="x")
+        Icon(next_step, "arrow", color=self.ACCENT, bg=TOKENS["subtle"]).pack(side="left", anchor="n", padx=(0, 8), pady=2)
+        action = tk.Label(next_step, text=task.get("next_action") or "下一步尚未记录", bg=TOKENS["subtle"], fg=self.INK,
+                          font=(self.font_family, 10), anchor="w", justify="left", wraplength=340)
+        action.pack(side="left", fill="x", expand=True)
+        def resize(event):
+            title.configure(wraplength=max(150, event.width))
+            progress.configure(wraplength=max(150, event.width))
+            action.configure(wraplength=max(130, event.width - 48))
+        frame.bind("<Configure>", resize, add=True)
+        def select(_event=None):
+            self._select_task(task["id"])
+        def bind_children(widget):
+            widget.bind("<Button-1>", select, add=True)
+            for child in widget.winfo_children():
+                bind_children(child)
+        bind_children(card)
+        card.bind("<Return>", select)
+        card.bind("<space>", select)
+        card.bind("<FocusIn>", lambda _e: card.set_outline(self.ACCENT))
+        card.bind("<FocusOut>", lambda _e: card.set_outline(self.ACCENT if selected else self.BORDER))
+        card.bind("<Enter>", lambda _e: card.set_outline(self.ACCENT))
+        card.bind("<Leave>", lambda _e: card.set_outline(self.ACCENT if selected else self.BORDER))
 
     def _select_task(self, task_id):
         self.selected_task = task_id
@@ -547,62 +664,78 @@ class CoindexApp:
             return
         for child in self.detail_content.winfo_children():
             child.destroy()
-        tk.Label(self.detail_content, text="选择一条待办查看详情", bg=self.SURFACE, fg=self.MUTED,
-                 font=("Sans", 11)).pack(padx=20, pady=30)
+        tk.Label(self.detail_content, text="选择一条事项查看详情", bg=self.SURFACE, fg=self.MUTED,
+                 font=(self.font_family, 10)).pack(padx=8, pady=30)
 
     def _show_detail(self, task):
         for child in self.detail_content.winfo_children():
             child.destroy()
         pane = self.detail_content
-        title = tk.Label(pane, text=task.get("title", ""), bg=self.SURFACE, fg=self.INK, font=("Sans", 15, "bold"),
-                         anchor="w", justify="left", wraplength=300)
-        title.pack(fill="x")
-        self._section(pane, "进展 / 停止点", task.get("progress") or task.get("detail") or "暂无记录")
-        self._section(pane, "下一步", task.get("next_action") or "尚未记录")
+        self._badge(pane, task.get("kind")).pack(anchor="w", pady=(0, 12))
+        tk.Label(pane, text=task.get("title", ""), bg=self.SURFACE, fg=self.INK, font=(self.font_family, 16, "bold"),
+                 anchor="w", justify="left", wraplength=280).pack(fill="x")
+        tk.Label(pane, text=self._host_label(task.get("host")), bg=self.SURFACE, fg=self.MUTED,
+                 font=(self.font_family, 9), anchor="w").pack(fill="x", pady=(8, 18))
+        buttons = []
+        primary_actions = tk.Frame(pane, bg=self.SURFACE)
+        primary_actions.pack(fill="x", pady=(0, 14))
+        status = task.get("status")
+        if status == "open" and task.get("snoozed_until", 0) <= time.time():
+            done = ttk.Button(primary_actions, text="完成", style="Accent.TButton", command=lambda: self._act("complete", task))
+            done.pack(side="left", fill="x", expand=True)
+            buttons.append(done)
+        elif status in ("done", "dismissed") or (status == "open" and task.get("snoozed_until", 0) > time.time()):
+            reopen = ttk.Button(primary_actions, text="重新打开", style="Accent.TButton", command=lambda: self._act("reopen", task))
+            reopen.pack(side="left", fill="x", expand=True)
+            buttons.append(reopen)
+        if task.get("kind") != "manual":
+            open_button = ttk.Button(primary_actions, text="打开对话", command=self.open_conversation)
+            open_button.pack(side="left", fill="x", expand=True, padx=(8 if buttons else 0, 0))
+            buttons.append(open_button)
+        tk.Frame(pane, height=1, bg=self.BORDER).pack(fill="x", pady=(0, 4))
+        self._section(pane, "当前进展", task.get("progress") or task.get("detail") or "暂无记录")
+        self._section(pane, "下一步", task.get("next_action") or "尚未记录", accent=True)
         self._section(pane, "依据", task.get("evidence") or "暂无依据")
-        self._section(pane, "产物", task.get("artifact") or "暂无产物")
-        meta = "%s\n%s" % ("本机 / Linux" if task.get("host") == "mac" else task.get("host", ""), task.get("conversation_title") or "手动待办")
-        self._section(pane, "来源", meta)
+        if task.get("artifact"):
+            self._section(pane, "相关产物", task["artifact"])
+        if task.get("conversation_title"):
+            self._section(pane, "原对话", task["conversation_title"])
         receipt = self._latest_nudge(task)
         pending_nudge = bool(receipt and receipt.get("status") in ("queued", "sending"))
         if receipt:
             self._section(pane, "最近催办", self._receipt_text(receipt))
-        elif task.get("status") == "conversation_closed":
+        elif status == "conversation_closed":
             self._section(pane, "状态", "对话已结束；请在对话列表中恢复后再恢复待办。")
-        elif task.get("status") == "conversation_archived":
+        elif status == "conversation_archived":
             self._section(pane, "状态", "对话已归档，待办保留在历史记录中。")
-        detail_buttons = []
-        for label, fn in (("打开对话", self.open_conversation), ("改标题", lambda: self.rename_task(task)),
-                          ("编辑", lambda: self.edit_task(task))):
-            if label == "打开对话" and task.get("kind") == "manual":
-                continue
-            button = ttk.Button(pane, text=label, command=fn)
-            button.pack(fill="x", pady=(7, 0))
-            detail_buttons.append(button)
-        status = task.get("status")
-        if not self.demo:
-            status_buttons = []
-            if status in ("done", "dismissed") or (status == "open" and task.get("snoozed_until", 0) > time.time()):
-                status_buttons.append(ttk.Button(pane, text="重新打开", command=lambda: self._act("reopen", task)))
-            elif status == "open":
-                status_buttons.append(ttk.Button(pane, text="完成", style="Accent.TButton", command=lambda: self._act("complete", task)))
-                status_buttons.append(ttk.Button(pane, text="稍后提醒…", command=lambda: self._snooze(task)))
-                status_buttons.append(ttk.Button(pane, text="忽略", command=lambda: self._act("dismiss", task)))
-                if task.get("kind") != "manual":
-                    nudge_button = ttk.Button(pane, text="轻推原对话…", command=lambda: self._nudge(task))
-                    if pending_nudge:
-                        nudge_button.configure(state="disabled")
-                    status_buttons.append(nudge_button)
-            detail_buttons.extend(status_buttons)
-            for button in status_buttons:
-                button.pack(fill="x", pady=(7, 0))
+        tk.Frame(pane, height=1, bg=self.BORDER).pack(fill="x", pady=(20, 14))
+        if status == "open" and task.get("snoozed_until", 0) <= time.time() and task.get("kind") != "manual":
+            nudge_button = ttk.Button(pane, text="轻推原对话…", style="Quiet.TButton", command=lambda: self._nudge(task))
+            nudge_button.pack(fill="x", pady=(0, 9))
+            if pending_nudge:
+                nudge_button.configure(state="disabled")
+            buttons.append(nudge_button)
+        secondary = tk.Frame(pane, bg=self.SURFACE)
+        secondary.pack(fill="x")
+        labels = [("改标题", lambda: self.rename_task(task))]
+        if task.get("kind") == "manual":
+            labels.append(("编辑", lambda: self.edit_task(task)))
+        if status == "open":
+            labels.extend((("稍后提醒…", lambda: self._snooze(task)), ("忽略", lambda: self._act("dismiss", task))))
+        for i, (label, command) in enumerate(labels):
+            button = ttk.Button(secondary, text=label, style="Quiet.TButton", command=command)
+            button.grid(row=i // 2, column=i % 2, sticky="ew", padx=(0 if i % 2 == 0 else 8, 0), pady=(0, 8))
+            buttons.append(button)
+        secondary.columnconfigure((0, 1), weight=1, uniform="detail")
         if self.demo:
-            for button in detail_buttons:
+            for button in buttons:
                 button.configure(state="disabled")
 
-    def _section(self, parent, heading, text):
-        tk.Label(parent, text=heading, bg=self.SURFACE, fg=self.MUTED, font=("Sans", 9, "bold"), anchor="w").pack(fill="x", pady=(13, 3))
-        tk.Label(parent, text=text, bg=self.SURFACE, fg=self.INK, font=("Sans", 10), anchor="w", justify="left", wraplength=305).pack(fill="x")
+    def _section(self, parent, heading, text, accent=False):
+        tk.Label(parent, text=heading, bg=self.SURFACE, fg=self.MUTED, font=(self.font_family, 9), anchor="w").pack(fill="x", pady=(18, 6))
+        tk.Label(parent, text=text, bg=TOKENS["accent_wash"] if accent else self.SURFACE,
+                 fg=self.ACCENT if accent else self.INK, font=(self.font_family, 10), anchor="w", justify="left",
+                 wraplength=275, padx=10 if accent else 0, pady=10 if accent else 0).pack(fill="x")
 
     def _latest_nudge(self, task):
         matches = [n for n in self.snapshot.get("nudges", [])
@@ -700,19 +833,26 @@ class CoindexApp:
 
     def _switch(self, name):
         self.tab = name
-        self.heading_var.set("待办" if name == "tasks" else "对话")
         if name == "tasks":
             self.conversation_page.pack_forget()
-            self.task_filters.pack(fill="x", pady=(0, 10))
             self.task_page.pack(fill="both", expand=True)
-            self.primary_button.configure(text="＋ 新建待办", command=self.new_task)
+            self.result_label.pack(anchor="w", pady=(0, 10), before=self.task_page)
+            self.task_filters.pack(fill="x", pady=(0, 18), before=self.result_label)
+            label = "已完成 / 稍后" if self.show_inactive else self.category_buttons.get(self.kind_var.get(), (None, "所有待办"))[1]
+            self.heading_var.set(label)
+            if not self.primary_button.winfo_manager():
+                self.primary_button.pack(side="right")
             self._render_tasks()
         else:
             self.task_page.pack_forget()
             self.task_filters.pack_forget()
+            self.result_label.pack_forget()
             self.conversation_page.pack(fill="both", expand=True)
-            self.primary_button.configure(text="", command=lambda: None)
+            self.primary_button.pack_forget()
+            self.heading_var.set("所有对话")
+            self.summary_var.set("跨设备的原始对话，随时回到上下文。")
             self._render_conversations()
+        self._refresh_navigation()
 
     def _render_conversations(self):
         if not hasattr(self, "conversations"):
@@ -723,11 +863,11 @@ class CoindexApp:
             if bool(conv.get("closed")) != self.conv_inactive_var.get():
                 continue
             title = conv.get("title") or "未命名对话"
-            host = "本机 / Linux" if conv.get("host") == "mac" else conv.get("host", "")
-            state = "已结束" if conv.get("closed") else conv.get("execution_state", "")
+            host = self._host_label(conv.get("host"))
+            state = "已结束" if conv.get("closed") else {"running": "进行中", "idle": "等待推进", "stopped": "已停止"}.get(conv.get("execution_state"), "待整理")
             item = self.conversations.insert("", "end", text=title, values=(host, state, self._age(conv.get("updated_at", 0))), iid=conv["id"])
             self.conv_map[item] = conv
-        self.close_conv_button.configure(text="恢复对话" if self.conv_inactive_var.get() else "结束对话")
+        self.close_conv_button.configure(text="恢复跟踪" if self.conv_inactive_var.get() else "结束跟踪")
 
     def _toggle_conversations(self):
         self._render_conversations()
@@ -784,7 +924,7 @@ class CoindexApp:
             else:
                 return
             number = getattr(event, "num", None)
-            delta = -1 if number == 5 else 1 if number == 4 else int(-event.delta / 120)
+            delta = 1 if number == 5 else -1 if number == 4 else int(-event.delta / 120)
             canvas.yview_scroll(delta, "units")
 
     def cancel_sync(self):
@@ -819,6 +959,14 @@ class CoindexApp:
             self.client.close()
         self.root.destroy()
 
+    def _destroyed(self, event):
+        if event.widget is not self.root:
+            return
+        if self.client:
+            self.client.close()
+        for timer in self.root.tk.call("after", "info"):
+            self.root.after_cancel(timer)
+
 
 class SettingsDialog:
     def __init__(self, app):
@@ -826,9 +974,15 @@ class SettingsDialog:
         self.saved = copy.deepcopy(app.snapshot.get("settings", {}))
         self.win = tk.Toplevel(app.root)
         self.win.title("设置")
-        self.win.geometry("690x690")
+        self.win.geometry("720x740")
+        self.win.minsize(600, 540)
+        self.win.configure(bg=app.BG)
         self.win.transient(app.root)
-        body = ttk.Frame(self.win, padding=18)
+        heading = ttk.Frame(self.win, padding=(24, 20, 24, 12))
+        heading.pack(fill="x")
+        ttk.Label(heading, text="偏好设置", font=(app.font_family, 18, "bold")).pack(anchor="w")
+        ttk.Label(heading, text="连接你的对话，安排适合自己的整理节奏。", style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
+        body = ttk.Frame(self.win, padding=(24, 4, 16, 12))
         body.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(body, highlightthickness=0, bg=app.BG)
         scroll = ttk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
@@ -838,6 +992,12 @@ class SettingsDialog:
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure("form", width=e.width))
         self.canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+        def scroll_form(event):
+            number = getattr(event, "num", None)
+            delta = 1 if number == 5 else -1 if number == 4 else int(-event.delta / 120)
+            self.canvas.yview_scroll(delta, "units")
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.win.bind(sequence, scroll_form)
         self.vars = {}
         self._initial_local_paths = tuple(self.saved.get(key, "") for key in ("codex_home", "codex_cli", "codex_app"))
         self._local_connection_succeeded = False
@@ -846,7 +1006,7 @@ class SettingsDialog:
         self._entry("codex_home", "Codex 数据目录", self.saved.get("codex_home", ""))
         self._entry("codex_cli", "Codex CLI 路径（留空自动查找）", self.saved.get("codex_cli", ""))
         self._entry("codex_app", "Codex 应用路径（可选）", self.saved.get("codex_app", ""))
-        ttk.Button(self.form, text="测试本机连接", command=self._test_local).pack(anchor="w", pady=(5, 10))
+        ttk.Button(self.section_body, text="检查本机连接", command=self._test_local).pack(anchor="w", pady=(10, 0))
         self._header("分析模型")
         self._entry("analysis_model", "模型名称", self.saved.get("analysis_model", "gpt-6-luna"))
         effort = tk.StringVar(value=self.saved.get("analysis_effort", "max"))
@@ -863,44 +1023,54 @@ class SettingsDialog:
             self._entry(key, label, "%02d:%02d" % divmod(minutes, 60))
         self._header("SSH 来源")
         self._check("local_enabled", "启用本机来源", "mac" in self.saved.get("enabled_hosts", ["mac"]))
-        self.host_list = ttk.Frame(self.form)
+        self.host_list = ttk.Frame(self.section_body, style="Panel.TFrame")
         self.host_list.pack(fill="x")
         self._render_hosts()
-        ttk.Button(self.form, text="＋ 添加 SSH 来源", command=lambda: RemoteDialog(self)).pack(anchor="w", pady=6)
-        foot = ttk.Frame(self.win, padding=(18, 6, 18, 14))
+        ttk.Button(self.section_body, text="＋ 添加 SSH 来源", command=lambda: RemoteDialog(self)).pack(anchor="w", pady=(12, 0))
+        tk.Frame(self.win, bg=app.BORDER, height=1).pack(fill="x")
+        foot = ttk.Frame(self.win, padding=(24, 14, 24, 18))
         foot.pack(fill="x")
-        ttk.Button(foot, text="保存设置", style="Accent.TButton", command=self._save).pack(side="right")
+        ttk.Button(foot, text="保存更改", style="Accent.TButton", command=self._save).pack(side="right")
+        ttk.Button(foot, text="关闭", style="Quiet.TButton", command=self.win.destroy).pack(side="right", padx=8)
 
     def _header(self, text):
-        ttk.Label(self.form, text=text, font=("Sans", 12, "bold")).pack(anchor="w", pady=(14, 7))
+        panel = RoundedPanel(self.form, padding=20)
+        panel.pack(fill="x", padx=(0, 8), pady=(0, 14))
+        self.section_body = panel.body
+        tk.Label(self.section_body, text=text, bg=self.app.SURFACE, fg=self.app.INK,
+                 font=(self.app.font_family, 12, "bold")).pack(anchor="w", pady=(0, 6))
+        descriptions = {"本机 Codex": "使用已有登录；留空路径可自动查找。", "分析模型": "用于整理目标、进度与下一步。",
+                        "自动检测": "只在设置的时间范围内检查变化。", "SSH 来源": "把其他机器上的对话汇集到同一个工作台。"}
+        tk.Label(self.section_body, text=descriptions.get(text, ""), bg=self.app.SURFACE, fg=self.app.MUTED,
+                 font=(self.app.font_family, 9), anchor="w", justify="left", wraplength=540).pack(fill="x", pady=(0, 10))
 
     def _entry(self, key, label, value):
-        ttk.Label(self.form, text=label).pack(anchor="w", pady=(5, 2))
+        ttk.Label(self.section_body, text=label, style="Panel.TLabel").pack(anchor="w", pady=(8, 5))
         var = tk.StringVar(value=str(value))
         self.vars[key] = var
-        ttk.Entry(self.form, textvariable=var).pack(fill="x")
+        ttk.Entry(self.section_body, textvariable=var).pack(fill="x")
 
     def _check(self, key, label, value):
         var = tk.BooleanVar(value=bool(value))
         self.vars[key] = var
-        ttk.Checkbutton(self.form, text=label, variable=var).pack(anchor="w", pady=2)
+        ttk.Checkbutton(self.section_body, text=label, variable=var, style="Panel.TCheckbutton").pack(anchor="w", pady=3)
 
     def _choice(self, label, var, values):
-        ttk.Label(self.form, text=label).pack(anchor="w")
-        ttk.Combobox(self.form, textvariable=var, values=values, state="readonly").pack(anchor="w", pady=3)
+        ttk.Label(self.section_body, text=label, style="Panel.TLabel").pack(anchor="w", pady=(8, 5))
+        ttk.Combobox(self.section_body, textvariable=var, values=values, state="readonly").pack(fill="x")
 
     def _render_hosts(self):
         for child in self.host_list.winfo_children():
             child.destroy()
         for profile in self.saved.get("remote_hosts", []):
-            row = ttk.Frame(self.host_list)
-            row.pack(fill="x", pady=2)
+            row = ttk.Frame(self.host_list, style="Panel.TFrame")
+            row.pack(fill="x", pady=6)
             enabled = self.vars.get("host:" + profile["id"])
             if enabled is None:
                 enabled = tk.BooleanVar(value=profile["id"] in self.saved.get("enabled_hosts", []))
                 self.vars["host:" + profile["id"]] = enabled
-            ttk.Checkbutton(row, text="启用", variable=enabled).pack(side="left")
-            ttk.Label(row, text="%s · %s" % (profile.get("name", profile["id"]), profile.get("hostname", profile["id"]))).pack(side="left", fill="x", expand=True)
+            ttk.Checkbutton(row, text="启用", variable=enabled, style="Panel.TCheckbutton").pack(side="left")
+            ttk.Label(row, text=profile.get("name", profile["id"]), style="Panel.TLabel").pack(side="left", fill="x", expand=True, padx=6)
             ttk.Button(row, text="测试", command=lambda p=profile: self._test_remote(p)).pack(side="right", padx=2)
             ttk.Button(row, text="编辑", command=lambda p=profile: RemoteDialog(self, p)).pack(side="right", padx=2)
             ttk.Button(row, text="移除", command=lambda p=profile: self._remove(p)).pack(side="right", padx=2)
@@ -1007,8 +1177,13 @@ class SettingsDialog:
         except ValueError as exc:
             messagebox.showerror("设置无效", str(exc), parent=self.win)
             return
-        self.app._settings_saved(values)
-        self.win.destroy()
+        def saved(response):
+            if response.get("error"):
+                messagebox.showerror("设置未保存", response["error"], parent=self.win)
+                return
+            self.app._mutation_result(response)
+            self.win.destroy()
+        self.app._rpc("settings", saved, values=values)
 
 
 class RemoteDialog:

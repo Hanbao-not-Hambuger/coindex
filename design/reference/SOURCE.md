@@ -8,4 +8,4 @@ License: MIT (see LICENSE).
 linear.DESIGN.md: design-md/linear.app/DESIGN.md
 apple.DESIGN.md: design-md/apple/DESIGN.md
 
-Design analyses used as references; coindex uses original branding and adapts these tokens for a native macOS task workspace.
+Design analyses used as references; coindex uses original branding and adapts these tokens for native macOS and Linux task workspaces.
