@@ -1,6 +1,8 @@
 """Check public source and app contents without printing potentially secret values."""
+import argparse
 import ipaddress
 import json
+from pathlib import Path
 import re
 from public_files import ROOT, public_files
 
@@ -46,18 +48,29 @@ def check(path):
                 issue(path, "non-example network address")
 
 
+parser = argparse.ArgumentParser(description="Check public source files and a built application bundle.")
+parser.add_argument("--app", type=Path, default=ROOT / "dist/coindex.app",
+                    help="application bundle to scan (default: dist/coindex.app)")
+args = parser.parse_args()
+app = args.app if args.app.is_absolute() else ROOT / args.app
+app = app.resolve()
+try:
+    app.relative_to(ROOT.resolve())
+except ValueError:
+    parser.error("--app must point inside the repository")
+
 source = public_files()
 for path in source:
     check(path)
-app = ROOT/"dist/coindex.app"
 if not app.is_dir():
     issue(app, "public app has not been built")
 else:
     for path in app.rglob("*"):
         if path.is_file() or path.is_symlink():
             check(path)
-    resources = app/"Contents/Resources"
-    if (resources/"Pets").exists():
-        issue(resources/"Pets", "imported Codex artwork in public app")
+    if app.suffix == ".app":
+        resources = app/"Contents/Resources"
+        if (resources/"Pets").exists():
+            issue(resources/"Pets", "imported Codex artwork in public app")
 print(json.dumps({"public_source_files": len(source), "issues": issues}, indent=2))
 raise SystemExit(bool(issues))

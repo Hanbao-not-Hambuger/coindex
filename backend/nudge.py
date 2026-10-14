@@ -8,6 +8,8 @@ import struct
 import subprocess
 import time
 import uuid
+import sys
+import shutil
 from connections import codex_home, desktop_host_id, profile, normalize_remote
 
 
@@ -238,8 +240,22 @@ def dispatch(task, action_id, ipc_factory=DesktopIPC, open_thread=None, accepted
 
 def open_desktop_thread(thread_id, host_id, app=""):
     from urllib.parse import urlencode
+    if not isinstance(thread_id, str) or str(uuid.UUID(thread_id)) != thread_id:
+        raise ValueError("Codex 对话编号无效")
     url = "codex://threads/"+thread_id+"?"+urlencode({"hostId": host_id})
-    subprocess.run(["/usr/bin/open"] + (["-a", str(pathlib.Path(app).expanduser())] if app else []) + [url], check=True, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if sys.platform == "darwin":
+        args = ["/usr/bin/open"] + (["-a", str(pathlib.Path(app).expanduser())] if app else [])
+    elif app:
+        executable = pathlib.Path(app).expanduser()
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise RuntimeError("设置的 Codex 桌面程序无法执行")
+        args = [str(executable)]
+    else:
+        opener = shutil.which("xdg-open")
+        if not opener:
+            raise RuntimeError("找不到 xdg-open，请安装 xdg-utils 或设置 Codex 桌面程序路径")
+        args = [opener]
+    subprocess.run(args + [url], check=True, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def run_nudge(folder, action_id):

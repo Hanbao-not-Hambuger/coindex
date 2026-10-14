@@ -4,13 +4,22 @@
 
 ## 开发与验证
 
-需要 macOS 14+、Xcode / Command Line Tools、Python 3.9+。后端只使用标准库。测试使用虚构数据与模拟连接，无真实登录时可运行：
+macOS 开发需要 macOS 14+、Xcode / Command Line Tools；Linux 桌面开发需要 Python 3.9+ 和 Tkinter。后端只使用标准库。测试使用虚构数据与模拟连接，无真实登录时可运行：
 
 ```sh
 CODEX_TODO_CODEX=/usr/bin/true python3 -m unittest discover -s tests -v
 bash scripts/build.sh
 open -n dist/coindex.app --args --demo
 ```
+
+Linux 桌面构建与启动：
+
+```sh
+bash scripts/build-linux.sh
+python3 linux/app.py --demo --data-dir /tmp/coindex-demo-data
+```
+
+Linux 安装器可在临时 XDG 数据目录与自定义 `--prefix` 下验证，不需要管理员权限。请勿在测试中使用个人默认数据目录。更多平台依赖和桌面集成边界见 [Linux 指南](docs/linux.md)。
 
 Swift 动画测试：
 
