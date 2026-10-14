@@ -4,17 +4,27 @@ import subprocess
 import sys
 import tempfile
 import time
-import tkinter as tk
 import unittest
 import json
+import threading
+import uuid
+
+try:
+    import tkinter as tk
+    from tkinter import ttk
+except ImportError:
+    tk = None
+    ttk = None
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from linux.app import CoindexApp, StdioClient, demo_snapshot
+from linux.app import CoindexApp, SettingsDialog, StdioClient, demo_snapshot
 
 
 class DemoUITests(unittest.TestCase):
     def setUp(self):
+        if tk is None:
+            self.skipTest("Tkinter is unavailable")
         try:
             self.root = tk.Tk()
         except tk.TclError as error:
@@ -25,6 +35,7 @@ class DemoUITests(unittest.TestCase):
     def tearDown(self):
         if getattr(self, "root", None):
             try:
+                self.root.update_idletasks()
                 self.app.close()
             except tk.TclError:
                 pass
@@ -32,7 +43,7 @@ class DemoUITests(unittest.TestCase):
     def test_demo_is_read_only_and_filters_task_list(self):
         self.assertIsNone(self.app.client)
         self.assertEqual(len(self.app.visible_task_ids), 3)
-        self.app.kind_var.set("目标")
+        self.app.kind_var.set("结果校对")
         self.app._render_tasks()
         self.assertEqual(len(self.app.visible_task_ids), 1)
         self.app.kind_var.set("全部类型")
@@ -40,6 +51,9 @@ class DemoUITests(unittest.TestCase):
         self.app._render_tasks()
         self.assertEqual(len(self.app.visible_task_ids), 1)
         self.assertTrue(self.app.primary_button.instate(["disabled"]))
+        self.assertTrue(self.app.settings_button.instate(["disabled"]))
+        self.app.open_settings()
+        self.assertFalse(any(isinstance(child, tk.Toplevel) for child in self.root.winfo_children()))
 
     def test_demo_snapshot_contains_separate_progress_and_action(self):
         task = demo_snapshot()["tasks"][0]
@@ -75,7 +89,221 @@ class DemoUITests(unittest.TestCase):
         self.assertEqual(calls[-1][0], "act")
         self.assertEqual(calls[-1][1]["action"], "complete")
         self.assertEqual(calls[-1][1]["entity_id"], "demo-task-0")
+        app.snapshot["schedule"]["off_duty"] = True
+        app.toggle_workday()
+        self.assertEqual(calls[-1][0], "resume_workday")
+        app.snapshot["sync"]["running"] = True
+        app._render()
+        self.assertTrue(app.stop_button.winfo_manager())
+        app.cancel_sync()
+        self.assertEqual(calls[-1][0], "cancel_sync")
         app.client.close()
+
+    def test_first_incomplete_snapshot_prompts_once_and_shows_health_details(self):
+        class FakeClient:
+            closed = False
+            class process:
+                @staticmethod
+                def poll(): return None
+            def request(self, method, callback=None, **values): return "rpc-id"
+            def drain(self): pass
+            def close(self): self.closed = True
+
+        app = CoindexApp(self.root, demo=False, client_factory=lambda *_: FakeClient(), demo_data=demo_snapshot())
+        prompted = []
+        app.open_settings = lambda: prompted.append(True)
+        data = demo_snapshot()
+        data["hosts"].append({"id": "server", "name": "测试机", "status": "offline", "detail": "SSH 不可达"})
+        data["model_error"] = "模型请求失败"
+        app._snapshot_result({"result": data})
+        self.root.update_idletasks()
+        self.assertEqual(prompted, [True])
+        self.assertIn("请先检查本机连接", app.sidebar_status.cget("text"))
+        self.assertIn("模型请求失败", app.status_var.get())
+        self.assertIn("SSH 不可达", app.status_var.get())
+        app._snapshot_result({"result": data})
+        self.root.update_idletasks()
+        self.assertEqual(prompted, [True])
+        app.client.close()
+
+    def test_closed_task_is_history_and_has_no_task_reopen_action(self):
+        calls = []
+
+        class FakeClient:
+            closed = False
+            class process:
+                @staticmethod
+                def poll(): return None
+            def request(self, method, callback=None, **values):
+                calls.append((method, values))
+                return "rpc-id"
+            def drain(self): pass
+            def close(self): self.closed = True
+
+        data = demo_snapshot()
+        data["tasks"][0]["status"] = "conversation_closed"
+        data["tasks"][1]["status"] = "done"
+        app = CoindexApp(self.root, demo=False, client_factory=lambda *_: FakeClient(), demo_data=data)
+        app._render()
+        self.assertEqual(app.visible_task_ids, ["demo-task-2"])
+        data["tasks"][2]["snoozed_until"] = time.time() + 3600
+        app.snapshot = data
+        app.show_inactive = True
+        app._render_tasks()
+        self.assertEqual(set(app.visible_task_ids), {"demo-task-0", "demo-task-1", "demo-task-2"})
+        app._select_task("demo-task-0")
+        self.assertFalse(any(isinstance(w, ttk.Button) and w.cget("text") == "重新打开"
+                             for w in self._descendants(app.detail_content)))
+        app.client.close()
+
+    @staticmethod
+    def _descendants(widget):
+        result = []
+        for child in widget.winfo_children():
+            result.append(child)
+            result.extend(DemoUITests._descendants(child))
+        return result
+
+    def test_nudge_receipt_is_visible_and_pending_send_is_disabled(self):
+        class FakeClient:
+            closed = False
+            class process:
+                @staticmethod
+                def poll(): return None
+            def request(self, method, callback=None, **values): return "rpc-id"
+            def drain(self): pass
+            def close(self): self.closed = True
+
+        data = demo_snapshot()
+        data["nudges"] = [{"action_id": "action-1", "conversation_id": data["tasks"][0]["conversation_id"],
+                           "status": "sending", "error": "", "attention": "正在与原对话连接", "updated_at": time.time()}]
+        app = CoindexApp(self.root, demo=False, client_factory=lambda *_: FakeClient(), demo_data=data)
+        app._select_task("demo-task-0")
+        labels = [w.cget("text") for w in self._descendants(app.detail_content) if isinstance(w, tk.Label)]
+        self.assertIn("正在发送\n正在与原对话连接", labels)
+        buttons = [w for w in self._descendants(app.detail_content) if isinstance(w, ttk.Button)]
+        nudge = next(w for w in buttons if w.cget("text") == "轻推原对话…")
+        self.assertEqual(str(nudge.cget("state")), "disabled")
+        app.client.close()
+
+    def test_unknown_nudge_requires_confirmation_and_uses_new_action_id(self):
+        import linux.app as ui
+        calls = []
+
+        class FakeClient:
+            closed = False
+            class process:
+                @staticmethod
+                def poll(): return None
+            def request(self, method, callback=None, **values):
+                calls.append((method, values))
+                return "rpc-id"
+            def drain(self): pass
+            def close(self): self.closed = True
+
+        data = demo_snapshot()
+        task = data["tasks"][0]
+        data["nudges"] = [{"action_id": "prior-action", "conversation_id": task["conversation_id"],
+                           "status": "unknown", "error": "请核对原对话", "attention": "", "updated_at": time.time()}]
+        app = CoindexApp(self.root, demo=False, client_factory=lambda *_: FakeClient(), demo_data=data)
+        app._render()
+        before = len(calls)
+        original_ask = ui.messagebox.askyesno
+        ui.messagebox.askyesno = lambda *args, **kwargs: True
+        try:
+            app._nudge(task)
+        finally:
+            ui.messagebox.askyesno = original_ask
+        self.assertEqual(len(calls), before + 1)
+        method, values = calls[-1]
+        self.assertEqual(method, "nudge")
+        self.assertTrue(values["retry_unknown"])
+        self.assertNotEqual(values["action_id"], "prior-action")
+        uuid.UUID(values["action_id"])
+        app.client.close()
+
+    def test_connection_gate_requires_local_success_and_failed_retest_clears_it(self):
+        import linux.app as ui
+        calls = []
+
+        class AppProxy:
+            def _rpc(self, method, callback=None, **values):
+                calls.append((method, values))
+            @staticmethod
+            def _mutation_result(_response):
+                pass
+
+        dialog = object.__new__(SettingsDialog)
+        dialog.app = AppProxy()
+        dialog.win = self.root
+        dialog.saved = {"connection_setup_complete": False}
+        dialog.vars = {key: tk.StringVar(master=self.root, value=value) for key, value in
+                       (("codex_home", ""), ("codex_cli", ""), ("codex_app", ""))}
+        dialog._local_connection_succeeded = False
+        dialog._tested_local_paths = None
+        original_showinfo, original_showerror = ui.messagebox.showinfo, ui.messagebox.showerror
+        ui.messagebox.showinfo = lambda *args, **kwargs: None
+        ui.messagebox.showerror = lambda *args, **kwargs: None
+        try:
+            dialog._checked({"result": {"ok": True, "detail": "SSH ok"}}, local=False)
+            self.assertFalse(dialog.saved["connection_setup_complete"])
+            self.assertEqual(calls, [])
+            dialog._checked({"result": {"ok": True, "detail": "local ok"}}, local=True)
+            self.assertTrue(dialog.saved["connection_setup_complete"])
+            self.assertEqual(calls[-1], ("settings", {"values": {"connection_setup_complete": True}}))
+            dialog._checked({"result": {"ok": False, "detail": "local failed"}}, local=True)
+            self.assertFalse(dialog.saved["connection_setup_complete"])
+            self.assertEqual(calls[-1], ("settings", {"values": {"connection_setup_complete": False}}))
+            dialog._initial_local_paths = ("", "", "")
+            dialog._local_connection_succeeded = False
+            dialog.vars["codex_cli"].set("/changed/codex")
+            self.assertFalse(dialog._values()["connection_setup_complete"])
+        finally:
+            ui.messagebox.showinfo, ui.messagebox.showerror = original_showinfo, original_showerror
+
+
+class StdioClientTests(unittest.TestCase):
+    def test_client_dispatches_on_caller_thread_and_reaps_after_eof(self):
+        callback_errors, exits = [], []
+        child = "import json,sys\nfor line in sys.stdin:\n r=json.loads(line); print(json.dumps({'id':r['id'],'result':{'ok':True}}),flush=True)\n"
+        client = StdioClient([sys.executable, "-u", "-c", child], lambda _m: None,
+                             lambda code: exits.append(code), callback_errors.append)
+        caller = threading.get_ident()
+
+        def broken_callback(_response):
+            self.assertEqual(threading.get_ident(), caller)
+            raise RuntimeError("callback test error")
+
+        client.request("snapshot", broken_callback)
+        self._drain_until(client, lambda: bool(callback_errors))
+        self.assertIn("callback test error", str(callback_errors[0]))
+        started = time.monotonic()
+        client.close()
+        self.assertLess(time.monotonic() - started, 0.2)
+        client.process.wait(timeout=3)
+        self._drain_until(client, lambda: bool(exits))
+        self.assertEqual(client.process.returncode, 0)
+
+    def test_process_exit_completes_pending_request_with_error(self):
+        responses, exits = [], []
+        child = "import time; time.sleep(10)"
+        client = StdioClient([sys.executable, "-u", "-c", child], lambda _m: None,
+                             lambda code: exits.append(code))
+        client.request("snapshot", responses.append)
+        client.close()
+        self._drain_until(client, lambda: bool(responses) and bool(exits))
+        self.assertIn("error", responses[0])
+        self.assertIsNotNone(client.process.returncode)
+
+    @staticmethod
+    def _drain_until(client, condition):
+        deadline = time.monotonic() + 4
+        while not condition() and time.monotonic() < deadline:
+            client.drain()
+            time.sleep(0.01)
+        client.drain()
+        if not condition():
+            raise AssertionError("stdio client event did not arrive")
 
 
 class StdioLifecycleTests(unittest.TestCase):

@@ -14,19 +14,19 @@ import tempfile
 import threading
 import time
 import uuid
-import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+try:
+    import tkinter as tk
+    from tkinter import messagebox, simpledialog, ttk
+except ImportError:  # --help remains usable on minimal Python installs.
+    tk = None
+    messagebox = simpledialog = ttk = None
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-try:
-    from platform_paths import default_data_dir
-except ImportError:  # Supports running this frontend from an older source checkout.
-    def default_data_dir():
-        return pathlib.Path.home() / ".local" / "share" / "coindex"
+from platform_paths import default_data_dir
 
 
 def demo_snapshot():
@@ -79,9 +79,10 @@ def load_demo_snapshot():
 
 class StdioClient:
     """Line-oriented RPC client. All Tk calls stay on the main thread."""
-    def __init__(self, command, on_message, on_exit=None, popen=subprocess.Popen):
+    def __init__(self, command, on_message, on_exit=None, on_callback_error=None, popen=subprocess.Popen):
         self.on_message = on_message
         self.on_exit = on_exit
+        self.on_callback_error = on_callback_error
         self.process = popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, text=True, bufsize=1, start_new_session=True)
         self.lock = threading.Lock()
@@ -109,9 +110,20 @@ class StdioClient:
                 try:
                     self.messages.put(json.loads(line))
                 except (ValueError, TypeError):
-                    self.messages.put({"error": "服务返回了无法识别的数据"})
+                    self.messages.put({"_unmatched": True, "error": "服务返回了无法识别的数据"})
         finally:
+            try:
+                self.process.stdout.close()
+            except OSError:
+                pass
             self.messages.put({"_closed": True, "returncode": self.process.poll()})
+
+    def _callback_failed(self, error):
+        if self.on_callback_error:
+            try:
+                self.on_callback_error(error)
+            except Exception:
+                pass
 
     def drain(self):
         while True:
@@ -120,12 +132,29 @@ class StdioClient:
             except queue.Empty:
                 break
             if msg.get("_closed"):
+                for request_id, callback in list(self.pending.items()):
+                    self.pending.pop(request_id, None)
+                    try:
+                        callback({"id": request_id, "error": "本地服务已退出"})
+                    except Exception as exc:
+                        self._callback_failed(exc)
                 if self.on_exit:
-                    self.on_exit(msg.get("returncode"))
+                    try:
+                        self.on_exit(msg.get("returncode"))
+                    except Exception as exc:
+                        self._callback_failed(exc)
+                continue
+            if msg.get("_unmatched"):
+                self._callback_failed(RuntimeError(msg.get("error", "服务响应无法匹配请求")))
                 continue
             callback = self.pending.pop(msg.get("id"), None)
             if callback:
-                callback(msg)
+                try:
+                    callback(msg)
+                except Exception as exc:
+                    self._callback_failed(exc)
+            elif msg.get("id"):
+                self._callback_failed(RuntimeError("服务响应编号无法匹配请求"))
 
     def close(self):
         if self.closed:
@@ -135,8 +164,30 @@ class StdioClient:
             self.process.stdin.close()
         except (OSError, AttributeError):
             pass
-        if self.process.poll() is None:
+        threading.Thread(target=self._reap_owned_process, daemon=True).start()
+
+    def _reap_owned_process(self):
+        if self.process.poll() is not None:
+            self.process.wait()
+            return
+        try:
+            self.process.wait(timeout=0.8)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        try:
             self.process.terminate()
+            self.process.wait(timeout=0.8)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        except ProcessLookupError:
+            pass
+        try:
+            self.process.kill()
+        except ProcessLookupError:
+            pass
+        self.process.wait()
 
 
 class CoindexApp:
@@ -153,6 +204,7 @@ class CoindexApp:
         self.show_inactive = False
         self.request_inflight = False
         self.last_auto_sync = 0
+        self.initial_settings_prompted = False
         self.client_factory = client_factory
         self._build()
         if demo:
@@ -162,7 +214,8 @@ class CoindexApp:
                 self.root.after(300, self._finish_smoke_test)
         else:
             self.client = self.client_factory([sys.executable, str(BACKEND / "service.py"), "--data-dir",
-                                              str(self.data_dir), "serve"], self._incoming, self._service_exit)
+                                              str(self.data_dir), "serve"], self._incoming, self._service_exit,
+                                              self._callback_error)
             self.root.after(50, self._drain)
             self._rpc("snapshot", self._snapshot_result)
 
@@ -175,6 +228,8 @@ class CoindexApp:
         args = parser.parse_args(argv)
         if args.smoke_test and not args.demo:
             parser.error("--smoke-test requires --demo")
+        if tk is None:
+            raise SystemExit("Tkinter is unavailable; install the python3-tk system package")
         root = tk.Tk()
         return cls(root, args.data_dir, args.demo, smoke_test=args.smoke_test)
 
@@ -183,12 +238,12 @@ class CoindexApp:
             if not self.snapshot.get("tasks") or not self.visible_task_ids:
                 raise RuntimeError("demo task list did not render")
             self._select_task(self.visible_task_ids[0])
-            if not self.detail.winfo_children():
+            if not self.detail_content.winfo_children():
                 raise RuntimeError("task detail pane did not render")
-            self.root.quit()
+            self.root.destroy()
         except Exception as exc:
             self.smoke_error = str(exc)
-            self.root.quit()
+            self.root.destroy()
 
     def _build(self):
         self.root.title("coindex")
@@ -222,7 +277,8 @@ class CoindexApp:
         self.nav_tasks.pack(fill="x", padx=12, pady=3)
         self.nav_convs = ttk.Button(sidebar, text="◷  对话", command=lambda: self._switch("conversations"))
         self.nav_convs.pack(fill="x", padx=12, pady=3)
-        ttk.Button(sidebar, text="⚙  设置", command=self.open_settings).pack(fill="x", padx=12, pady=(3, 3))
+        self.settings_button = ttk.Button(sidebar, text="⚙  设置", command=self.open_settings)
+        self.settings_button.pack(fill="x", padx=12, pady=(3, 3))
         self.sidebar_status = tk.Label(sidebar, text="服务连接中…", bg=self.SIDEBAR, fg=self.MUTED,
                                        justify="left", wraplength=185, font=("Sans", 9))
         self.sidebar_status.pack(side="bottom", anchor="w", padx=18, pady=18)
@@ -239,6 +295,9 @@ class CoindexApp:
         self.primary_button.pack(side="right")
         self.update_button = ttk.Button(header, text="更新", command=self.manual_sync)
         self.update_button.pack(side="right", padx=(0, 8))
+        self.stop_button = ttk.Button(header, text="中止更新", command=self.cancel_sync)
+        self.workday_button = ttk.Button(header, text="下班", command=self.toggle_workday)
+        self.workday_button.pack(side="right", padx=(0, 8))
 
         self.task_filters = ttk.Frame(content)
         self.task_filters.pack(fill="x", pady=(0, 10))
@@ -248,7 +307,7 @@ class CoindexApp:
         search.insert(0, "")
         self.search_var.trace_add("write", lambda *_: self._render_tasks())
         self.kind_var = tk.StringVar(value="全部类型")
-        self.kind_box = ttk.Combobox(self.task_filters, textvariable=self.kind_var, values=("全部类型", "目标", "继续", "等待", "决策", "手动"), state="readonly", width=11)
+        self.kind_box = ttk.Combobox(self.task_filters, textvariable=self.kind_var, values=("全部类型", "结果校对", "继续", "等待", "决策", "进行中", "手动"), state="readonly", width=11)
         self.kind_box.pack(side="left", padx=4)
         self.kind_box.bind("<<ComboboxSelected>>", lambda _e: self._render_tasks())
         self.host_var = tk.StringVar(value="全部来源")
@@ -264,6 +323,7 @@ class CoindexApp:
         task_split = ttk.Frame(self.task_page)
         task_split.pack(fill="both", expand=True)
         list_frame = tk.Frame(task_split, bg=self.BG)
+        self.task_list_frame = list_frame
         list_frame.pack(side="left", fill="both", expand=True)
         self.canvas = tk.Canvas(list_frame, bg=self.BG, highlightthickness=0)
         self.task_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.canvas.yview)
@@ -274,10 +334,24 @@ class CoindexApp:
         self.cards_window = self.canvas.create_window((0, 0), window=self.cards, anchor="nw")
         self.cards.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.cards_window, width=e.width))
-        self.canvas.bind_all("<MouseWheel>", self._wheel)
+        self.root.bind_all("<MouseWheel>", self._wheel)
+        self.root.bind_all("<Button-4>", self._wheel)
+        self.root.bind_all("<Button-5>", self._wheel)
         self.detail = tk.Frame(task_split, bg=self.SURFACE, width=360, highlightthickness=1, highlightbackground=self.BORDER)
         self.detail.pack(side="right", fill="y", padx=(14, 0))
         self.detail.pack_propagate(False)
+        self.detail_canvas = tk.Canvas(self.detail, bg=self.SURFACE, highlightthickness=0, takefocus=True)
+        self.detail_scroll = ttk.Scrollbar(self.detail, orient="vertical", command=self.detail_canvas.yview)
+        self.detail_canvas.configure(yscrollcommand=self.detail_scroll.set)
+        self.detail_canvas.pack(side="left", fill="both", expand=True)
+        self.detail_scroll.pack(side="right", fill="y")
+        self.detail_content = tk.Frame(self.detail_canvas, bg=self.SURFACE, padx=18, pady=18)
+        self.detail_window = self.detail_canvas.create_window((0, 0), window=self.detail_content, anchor="nw")
+        self.detail_content.bind("<Configure>", lambda _e: self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all")))
+        self.detail_canvas.bind("<Configure>", lambda e: self.detail_canvas.itemconfigure(self.detail_window, width=e.width))
+        self.detail_canvas.bind("<Button-1>", lambda _e: self.detail_canvas.focus_set())
+        self.detail_canvas.bind("<Up>", lambda _e: self.detail_canvas.yview_scroll(-1, "units"))
+        self.detail_canvas.bind("<Down>", lambda _e: self.detail_canvas.yview_scroll(1, "units"))
         self._clear_detail()
 
         self.conversation_page.pack_forget()
@@ -309,7 +383,8 @@ class CoindexApp:
 
     def _disable_mutations(self):
         if self.demo:
-            for widget in (self.primary_button, self.update_button, self.open_conv_button, self.close_conv_button):
+            for widget in (self.primary_button, self.update_button, self.settings_button, self.open_conv_button,
+                           self.close_conv_button, self.workday_button, self.stop_button):
                 widget.configure(state="disabled")
 
     def _rpc(self, method, callback=None, **kwargs):
@@ -336,12 +411,19 @@ class CoindexApp:
             return
         self.sidebar_status.configure(text="本地服务已退出" + ("" if code in (None, 0) else "（错误 %s）" % code), fg="#A34444")
 
+    def _callback_error(self, error):
+        self._error("界面处理服务响应失败：%s" % error)
+
     def _snapshot_result(self, response):
         if response.get("error"):
             self._error(response["error"])
             return
         self.snapshot = response.get("result", {})
         self._render()
+        if (not self.demo and not self.initial_settings_prompted
+                and not self.snapshot.get("settings", {}).get("connection_setup_complete")):
+            self.initial_settings_prompted = True
+            self.root.after_idle(self.open_settings)
         self._maybe_auto_sync()
         if self.client and not self.client.closed:
             self.root.after(2500, lambda: self._rpc("snapshot", self._snapshot_result))
@@ -359,8 +441,23 @@ class CoindexApp:
         settings = self.snapshot.get("settings", {})
         schedule = self.snapshot.get("schedule", {})
         sync = self.snapshot.get("sync", {})
-        self.status_var.set(sync.get("phase") or schedule.get("summary", ""))
-        self.sidebar_status.configure(text="演示模式" if self.demo else "自动更新已开启" if settings.get("automatic") else "自动更新已暂停")
+        notices = [sync.get("phase") or schedule.get("summary", "")]
+        if self.snapshot.get("model_error"):
+            notices.append("分析提示：" + str(self.snapshot["model_error"])[:180])
+        for host in self.snapshot.get("hosts", []):
+            if host.get("status") in ("offline", "partial"):
+                label = "本机 / Linux" if host.get("id") == "mac" else host.get("name") or host.get("id", "来源")
+                notices.append("%s：%s" % (label, str(host.get("detail") or "连接异常")[:100]))
+        self.status_var.set(" · ".join(x for x in notices if x))
+        self.sidebar_status.configure(text="演示模式" if self.demo else
+                                      "请先检查本机连接" if not settings.get("connection_setup_complete") else
+                                      "自动更新已开启" if settings.get("automatic") else "自动更新已暂停")
+        self.workday_button.configure(text="上班" if schedule.get("off_duty") else "下班")
+        if sync.get("running") and not self.demo:
+            if not self.stop_button.winfo_manager():
+                self.stop_button.pack(side="right", padx=(0, 8))
+        elif self.stop_button.winfo_manager():
+            self.stop_button.pack_forget()
         names = {h["id"]: ("本机 / Linux" if h["id"] == "mac" else h.get("name") or h["id"])
                  for h in self.snapshot.get("hosts", [])}
         names["manual"] = "手动"
@@ -374,7 +471,7 @@ class CoindexApp:
         self._render_conversations()
 
     def _kind_label(self, kind):
-        return {"review": "目标", "continue": "继续", "wait": "等待", "decision": "决策", "manual": "手动", "running": "进行中"}.get(kind, kind or "任务")
+        return {"review": "结果校对", "continue": "继续", "wait": "等待", "decision": "决策", "manual": "手动", "running": "进行中"}.get(kind, kind or "任务")
 
     def _render_tasks(self):
         if not hasattr(self, "cards"):
@@ -390,7 +487,7 @@ class CoindexApp:
         now = time.time()
         for task in tasks:
             status = task.get("status", "open")
-            inactive = status in ("done", "dismissed") or task.get("snoozed_until", 0) > now
+            inactive = status != "open" or task.get("snoozed_until", 0) > now
             if inactive != self.show_inactive:
                 continue
             if search and search not in " ".join(str(task.get(k, "")) for k in ("title", "detail", "progress", "evidence", "next_action", "conversation_title")).lower():
@@ -440,16 +537,15 @@ class CoindexApp:
     def _clear_detail(self):
         if not hasattr(self, "detail"):
             return
-        for child in self.detail.winfo_children():
+        for child in self.detail_content.winfo_children():
             child.destroy()
-        tk.Label(self.detail, text="选择一条待办查看详情", bg=self.SURFACE, fg=self.MUTED,
+        tk.Label(self.detail_content, text="选择一条待办查看详情", bg=self.SURFACE, fg=self.MUTED,
                  font=("Sans", 11)).pack(padx=20, pady=30)
 
     def _show_detail(self, task):
-        for child in self.detail.winfo_children():
+        for child in self.detail_content.winfo_children():
             child.destroy()
-        pane = tk.Frame(self.detail, bg=self.SURFACE)
-        pane.pack(fill="both", expand=True, padx=18, pady=18)
+        pane = self.detail_content
         title = tk.Label(pane, text=task.get("title", ""), bg=self.SURFACE, fg=self.INK, font=("Sans", 15, "bold"),
                          anchor="w", justify="left", wraplength=300)
         title.pack(fill="x")
@@ -459,6 +555,14 @@ class CoindexApp:
         self._section(pane, "产物", task.get("artifact") or "暂无产物")
         meta = "%s\n%s" % ("本机 / Linux" if task.get("host") == "mac" else task.get("host", ""), task.get("conversation_title") or "手动待办")
         self._section(pane, "来源", meta)
+        receipt = self._latest_nudge(task)
+        pending_nudge = bool(receipt and receipt.get("status") in ("queued", "sending"))
+        if receipt:
+            self._section(pane, "最近催办", self._receipt_text(receipt))
+        elif task.get("status") == "conversation_closed":
+            self._section(pane, "状态", "对话已结束；请在对话列表中恢复后再恢复待办。")
+        elif task.get("status") == "conversation_archived":
+            self._section(pane, "状态", "对话已归档，待办保留在历史记录中。")
         detail_buttons = []
         for label, fn in (("打开对话", self.open_conversation), ("改标题", lambda: self.rename_task(task)),
                           ("编辑", lambda: self.edit_task(task))):
@@ -470,14 +574,17 @@ class CoindexApp:
         status = task.get("status")
         if not self.demo:
             status_buttons = []
-            if status in ("done", "dismissed") or task.get("snoozed_until", 0) > time.time():
+            if status in ("done", "dismissed") or (status == "open" and task.get("snoozed_until", 0) > time.time()):
                 status_buttons.append(ttk.Button(pane, text="重新打开", command=lambda: self._act("reopen", task)))
-            else:
+            elif status == "open":
                 status_buttons.append(ttk.Button(pane, text="完成", style="Accent.TButton", command=lambda: self._act("complete", task)))
                 status_buttons.append(ttk.Button(pane, text="稍后提醒…", command=lambda: self._snooze(task)))
                 status_buttons.append(ttk.Button(pane, text="忽略", command=lambda: self._act("dismiss", task)))
                 if task.get("kind") != "manual":
-                    status_buttons.append(ttk.Button(pane, text="轻推原对话…", command=lambda: self._nudge(task)))
+                    nudge_button = ttk.Button(pane, text="轻推原对话…", command=lambda: self._nudge(task))
+                    if pending_nudge:
+                        nudge_button.configure(state="disabled")
+                    status_buttons.append(nudge_button)
             detail_buttons.extend(status_buttons)
             for button in status_buttons:
                 button.pack(fill="x", pady=(7, 0))
@@ -488,6 +595,22 @@ class CoindexApp:
     def _section(self, parent, heading, text):
         tk.Label(parent, text=heading, bg=self.SURFACE, fg=self.MUTED, font=("Sans", 9, "bold"), anchor="w").pack(fill="x", pady=(13, 3))
         tk.Label(parent, text=text, bg=self.SURFACE, fg=self.INK, font=("Sans", 10), anchor="w", justify="left", wraplength=305).pack(fill="x")
+
+    def _latest_nudge(self, task):
+        matches = [n for n in self.snapshot.get("nudges", [])
+                   if n.get("conversation_id") == task.get("conversation_id")]
+        return max(matches, key=lambda n: n.get("updated_at", n.get("created_at", 0)), default=None)
+
+    @staticmethod
+    def _receipt_text(receipt):
+        labels = {"queued": "等待发送", "sending": "正在发送", "sent": "已送达", "failed": "发送失败",
+                  "unknown": "送达情况未知", "checked": "已核对"}
+        lines = [labels.get(receipt.get("status"), receipt.get("status", "状态未知"))]
+        if receipt.get("error"):
+            lines.append(receipt["error"])
+        if receipt.get("attention"):
+            lines.append(receipt["attention"])
+        return "\n".join(lines)
 
     def _act(self, action, task):
         self._rpc("act", self._mutation_result, action=action, entity_id=task["id"])
@@ -644,7 +767,27 @@ class CoindexApp:
 
     def _wheel(self, event):
         if self.tab == "tasks":
-            self.canvas.yview_scroll(int(-event.delta / 120), "units")
+            widget = self.root.winfo_containing(event.x_root, event.y_root)
+            path = str(widget) if widget else ""
+            if path.startswith(str(self.detail)):
+                canvas = self.detail_canvas
+            elif path.startswith(str(self.task_list_frame)):
+                canvas = self.canvas
+            else:
+                return
+            number = getattr(event, "num", None)
+            delta = -1 if number == 5 else 1 if number == 4 else int(-event.delta / 120)
+            canvas.yview_scroll(delta, "units")
+
+    def cancel_sync(self):
+        if not self.demo:
+            self._rpc("cancel_sync", self._mutation_result)
+
+    def toggle_workday(self):
+        if self.demo:
+            return
+        method = "resume_workday" if self.snapshot.get("schedule", {}).get("off_duty") else "finish_workday"
+        self._rpc(method, self._mutation_result)
 
     def manual_sync(self):
         if self.demo:
@@ -688,6 +831,9 @@ class SettingsDialog:
         self.canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
         self.vars = {}
+        self._initial_local_paths = tuple(self.saved.get(key, "") for key in ("codex_home", "codex_cli", "codex_app"))
+        self._local_connection_succeeded = False
+        self._tested_local_paths = None
         self._header("本机 Codex")
         self._entry("codex_home", "Codex 数据目录", self.saved.get("codex_home", ""))
         self._entry("codex_cli", "Codex CLI 路径（留空自动查找）", self.saved.get("codex_cli", ""))
@@ -714,7 +860,6 @@ class SettingsDialog:
         foot = ttk.Frame(self.win, padding=(18, 6, 18, 14))
         foot.pack(fill="x")
         ttk.Button(foot, text="保存设置", style="Accent.TButton", command=self._save).pack(side="right")
-        self._connection_succeeded = False
 
     def _header(self, text):
         ttk.Label(self.form, text=text, font=("Sans", 12, "bold")).pack(anchor="w", pady=(14, 7))
@@ -762,9 +907,8 @@ class SettingsDialog:
         except ValueError as exc:
             messagebox.showerror("设置无效", str(exc), parent=self.win)
             return
-        # The service checks its persisted connection settings. Save the edited paths
-        # first, while keeping setup incomplete until the check itself succeeds.
-        values.pop("connection_setup_complete", None)
+        # The service checks its persisted connection settings. Save edited paths
+        # first, while preserving an incomplete gate until this local check succeeds.
         self.app._rpc("settings", lambda r: self._after_local_settings(r), values=values)
 
     def _after_local_settings(self, response):
@@ -779,15 +923,28 @@ class SettingsDialog:
 
     def _checked(self, response, local):
         if response.get("error"):
+            if local:
+                self._local_check_failed()
             messagebox.showerror("连接测试失败", response["error"], parent=self.win)
             return
         result = response.get("result", {})
         if result.get("ok"):
-            self._connection_succeeded = True
-            self.saved["connection_setup_complete"] = True
+            if local:
+                self._local_connection_succeeded = True
+                self._tested_local_paths = tuple(str(self.vars[key].get()).strip() for key in ("codex_home", "codex_cli", "codex_app"))
+                self.saved["connection_setup_complete"] = True
+                self.app._rpc("settings", self.app._mutation_result, values={"connection_setup_complete": True})
             messagebox.showinfo("连接可用", result.get("detail", "连接测试通过。"), parent=self.win)
         else:
+            if local:
+                self._local_check_failed()
             messagebox.showerror("连接测试失败", result.get("detail", "连接检查未通过。"), parent=self.win)
+
+    def _local_check_failed(self):
+        self._local_connection_succeeded = False
+        self._tested_local_paths = None
+        self.saved["connection_setup_complete"] = False
+        self.app._rpc("settings", self.app._mutation_result, values={"connection_setup_complete": False})
 
     def _values(self):
         values = {}
@@ -809,7 +966,12 @@ class SettingsDialog:
                 enabled.append(item["id"])
         values["remote_hosts"] = remotes
         values["enabled_hosts"] = enabled
-        if self._connection_succeeded:
+        current_paths = tuple(str(self.vars[key].get()).strip() for key in ("codex_home", "codex_cli", "codex_app"))
+        local_paths_changed = current_paths != self._initial_local_paths
+        local_test_valid = (self._local_connection_succeeded and current_paths == self._tested_local_paths)
+        if local_paths_changed and not local_test_valid:
+            values["connection_setup_complete"] = False
+        elif local_test_valid:
             values["connection_setup_complete"] = True
         return values
 
@@ -874,4 +1036,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
