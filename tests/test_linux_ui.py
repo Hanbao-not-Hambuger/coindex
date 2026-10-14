@@ -8,6 +8,7 @@ import unittest
 import json
 import threading
 import uuid
+from unittest.mock import patch
 
 try:
     import tkinter as tk
@@ -60,6 +61,59 @@ class DemoUITests(unittest.TestCase):
         self.assertTrue(task["progress"])
         self.assertTrue(task["next_action"])
         self.assertIn("本机 / Linux", [h["name"] for h in demo_snapshot()["hosts"]])
+
+    def test_filter_selection_never_leaves_details_on_a_hidden_task(self):
+        self.app._select_task("demo-task-0")
+        self.app.search_var.set("基准测试")
+        self.assertEqual(self.app.visible_task_ids, ["demo-task-2"])
+        self.assertEqual(self.app.selected_task, "demo-task-2")
+        self.app.search_var.set("no fictional task has this phrase")
+        self.assertIsNone(self.app.selected_task)
+        self.assertFalse(self.app.detail.winfo_manager())
+        self.app._clear_filters()
+        self.assertEqual(self.app.result_count, 3)
+        self.assertTrue(self.app.detail.winfo_manager())
+
+    def test_sidebar_filters_and_conversation_switch_restore_task_controls(self):
+        self.app._choose_kind("结果校对")
+        self.assertEqual(self.app.visible_task_ids, ["demo-task-0"])
+        self.app._switch("conversations")
+        self.assertFalse(self.app.primary_button.winfo_manager())
+        self.assertFalse(self.app.task_filters.winfo_manager())
+        self.app._choose_kind("全部类型")
+        self.assertTrue(self.app.primary_button.winfo_manager())
+        self.assertTrue(self.app.task_filters.winfo_manager())
+        self.assertEqual(self.app.result_count, 3)
+        self.app._choose_history()
+        self.assertTrue(self.app.show_inactive)
+        self.assertEqual(self.app.result_count, 0)
+
+    def test_minimum_window_keeps_primary_controls_and_long_details_reachable(self):
+        self.root.geometry("1000x680")
+        self.root.deiconify()
+        self.root.update()
+        right = self.root.winfo_rootx() + self.root.winfo_width()
+        for widget in (self.app.primary_button, self.app.update_button, self.app.host_box):
+            self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(), right)
+            self.assertGreater(widget.winfo_width(), 20)
+        self.app.snapshot["tasks"][0]["evidence"] = "Fictional long evidence. " * 100
+        self.app._select_task("demo-task-0")
+        self.root.update_idletasks()
+        self.assertLess(self.app.detail_canvas.yview()[1], 1)
+        self.app.detail_canvas.yview_moveto(1)
+        self.root.update_idletasks()
+        self.assertAlmostEqual(self.app.detail_canvas.yview()[1], 1, places=2)
+
+    def test_settings_save_failure_preserves_the_form(self):
+        dialog = SettingsDialog(self.app)
+        self.app._rpc = lambda _method, callback=None, **_values: callback({"error": "Fictional validation failure"})
+        with patch("linux.app.messagebox.showerror") as error:
+            dialog._save()
+        self.assertTrue(dialog.win.winfo_exists())
+        self.assertEqual(error.call_args.args[1], "Fictional validation failure")
+        self.app._rpc = lambda _method, callback=None, **_values: callback({"result": demo_snapshot()})
+        dialog._save()
+        self.assertFalse(dialog.win.winfo_exists())
 
     def test_task_action_uses_stdio_rpc_transport(self):
         calls = []

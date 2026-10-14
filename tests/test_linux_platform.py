@@ -58,7 +58,7 @@ class PlatformTests(unittest.TestCase):
             for executable in (app, cli):
                 executable.write_text("#!/bin/sh\nexit 0\n")
                 executable.chmod(0o700)
-            self.assertEqual(codex_path({"codex_app": str(app)}), str(cli))
+            self.assertEqual(codex_path({"codex_app": str(app)}), str(cli.resolve()))
             with self.assertRaisesRegex(RuntimeError, "无法执行"):
                 codex_path({"codex_app": str(root / "missing")})
 
