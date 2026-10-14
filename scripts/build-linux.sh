@@ -10,7 +10,14 @@ for required in "$ROOT/linux/app.py" "$ROOT/LICENSE" "$ROOT/Resources/Brand/AppI
   fi
 done
 
-rm -rf "$APP"
+if [[ -e "$APP" || -L "$APP" ]]; then
+  if [[ ! -d "$APP" || -L "$APP" || ! -f "$APP/coindex" ]] || \
+     ! grep -Fxq '# Managed by coindex build-linux.sh' "$APP/coindex"; then
+    printf 'Refusing to replace an existing unrecognized path: %s\n' "$APP" >&2
+    exit 1
+  fi
+  rm -rf "$APP"
+fi
 mkdir -p "$APP/backend" "$APP/linux" "$APP/Resources/Brand" "$APP/scripts"
 cp "$ROOT/backend/"*.py "$APP/backend/"
 cp "$ROOT/linux/"*.py "$APP/linux/"
@@ -20,6 +27,7 @@ cp "$ROOT/Resources/Brand/AppIcon.png" "$APP/Resources/Brand/AppIcon.png"
 python3 "$ROOT/scripts/create-demo.py" "$APP/demo.json"
 cat > "$APP/coindex" <<'LAUNCHER'
 #!/bin/sh
+# Managed by coindex build-linux.sh
 set -eu
 APP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PYTHON="${CODEX_TODO_PYTHON:-python3}"
