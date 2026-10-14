@@ -7,10 +7,13 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 
 ALIAS = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,252}\Z")
 CLI_SUFFIXES = ("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
                 "Contents/Resources/codex", "Contents/MacOS/codex")
+LINUX_CLI_SUFFIXES = ("resources/codex", "resources/codex-cli/codex",
+                      "resources/app/node_modules/@openai/codex/bin/codex")
 
 
 def text(value, label, limit=4096):
@@ -81,18 +84,31 @@ def codex_path(settings=None):
             return str(candidate.resolve())
         raise RuntimeError("设置的 Codex CLI 无法执行，请重新选择或清空路径以自动发现")
     app = settings.get("codex_app")
-    if app:
+    if app and (sys.platform == "darwin" or pathlib.Path(app).suffix == ".app"):
         for suffix in CLI_SUFFIXES:
             candidate = pathlib.Path(app).expanduser()/suffix
             if candidate.is_file() and os.access(candidate, os.X_OK):
                 return str(candidate.resolve())
         raise RuntimeError("所选应用中找不到 Codex CLI，请选择 CLI 文件或重新选择应用")
+    if app and sys.platform.startswith("linux"):
+        executable = pathlib.Path(app).expanduser()
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise RuntimeError("设置的 Codex 桌面程序无法执行")
+        for suffix in LINUX_CLI_SUFFIXES:
+            candidate = executable.parent/suffix
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate.resolve())
     found = shutil.which("codex")
     if found:
         return found
     roots = [pathlib.Path.home()/"Applications", pathlib.Path("/Applications")]
     candidates = [pathlib.Path.home()/p for p in (".local/bin/codex", ".codex/bin/codex", ".npm-global/bin/codex")]
     candidates += sorted((pathlib.Path.home()/".nvm/versions/node").glob("*/bin/codex"), reverse=True)
+    if sys.platform.startswith("linux"):
+        linux_roots = [pathlib.Path("/opt/Codex"), pathlib.Path("/opt/codex"), pathlib.Path("/opt/ChatGPT"), pathlib.Path("/opt/chatgpt")]
+        if app:
+            linux_roots.insert(0, pathlib.Path(app).expanduser().parent)
+        candidates += [root/suffix for root in linux_roots for suffix in LINUX_CLI_SUFFIXES]
     candidates += [root/(name+".app")/suffix for root in roots for name in ("Codex", "ChatGPT") for suffix in CLI_SUFFIXES]
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):

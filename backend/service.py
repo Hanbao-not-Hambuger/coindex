@@ -18,6 +18,7 @@ from analyzer import analyze, codex_path, rewrite_task_copy
 from store import Store
 from connections import profile, ssh_command, ssh_aliases, local_check, remote_check, normalize_remote, codex_home
 from schedule import automatic_state, refresh_calendars, refresh_needed, off_duty_state, finish_workday
+from platform_paths import default_data_dir
 
 
 def collect_host(host, request, settings=None):
@@ -225,6 +226,26 @@ def serve(folder):
                 result = store.snapshot()
             elif action == "ssh_aliases":
                 result = {"aliases": ssh_aliases()}
+            elif action == "open_thread":
+                from nudge import open_desktop_thread
+                from connections import desktop_host_id
+                snapshot = store.snapshot()
+                target = next((item for item in snapshot["conversations"] + snapshot["tasks"]
+                               if item["id"] == request.get("entity_id") and item.get("thread_id")), None)
+                if target is None:
+                    raise ValueError("找不到关联的 Codex 对话")
+                settings = store.settings()
+                thread_id = target["thread_id"]
+                host_id = desktop_host_id(settings, target["host"])
+                request_id = request.get("id")
+                def open_and_emit(request_id=request_id, thread_id=thread_id, host_id=host_id, settings=settings):
+                    try:
+                        open_desktop_thread(thread_id, host_id, settings["codex_app"])
+                        emit({"id": request_id, "result": {"opened": True}})
+                    except Exception as error:
+                        emit({"id": request_id, "error": redact(str(error))[:1000]})
+                threading.Thread(target=open_and_emit, daemon=True).start()
+                continue
             elif action == "ssh_terminal_command":
                 result = {"command": shlex.join(ssh_command(request.get("profile", {}), interactive=True))}
             elif action == "check_connection":
@@ -287,7 +308,7 @@ def serve(folder):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", default=str(pathlib.Path.home() / "Library/Application Support/CodexTodo"))
+    parser.add_argument("--data-dir", default=str(default_data_dir()))
     parser.add_argument("command", choices=["serve", "sync", "snapshot", "act", "diagnostics", "calendar-refresh", "nudge"])
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--collect-only", action="store_true")
