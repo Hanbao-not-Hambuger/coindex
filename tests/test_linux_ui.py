@@ -258,6 +258,15 @@ class DemoUITests(unittest.TestCase):
             dialog._local_connection_succeeded = False
             dialog.vars["codex_cli"].set("/changed/codex")
             self.assertFalse(dialog._values()["connection_setup_complete"])
+            dialog._checking_local_paths = ("", "", "")
+            dialog._checked({"result": {"ok": True, "detail": "old path ok"}}, local=True)
+            self.assertFalse(dialog.saved["connection_setup_complete"])
+            self.assertFalse(dialog._local_connection_succeeded)
+            dialog.vars["work_start_minutes"] = tk.StringVar(master=self.root, value="09:30")
+            self.assertEqual(dialog._values()["work_start_minutes"], 570)
+            dialog.vars["work_start_minutes"].set("24:30")
+            with self.assertRaisesRegex(ValueError, "HH:MM"):
+                dialog._values()
         finally:
             ui.messagebox.showinfo, ui.messagebox.showerror = original_showinfo, original_showerror
 
@@ -290,10 +299,23 @@ class StdioClientTests(unittest.TestCase):
         client = StdioClient([sys.executable, "-u", "-c", child], lambda _m: None,
                              lambda code: exits.append(code))
         client.request("snapshot", responses.append)
+        client.process.terminate()
         client.close()
         self._drain_until(client, lambda: bool(responses) and bool(exits))
         self.assertIn("error", responses[0])
         self.assertIsNotNone(client.process.returncode)
+
+    def test_invalid_response_object_surfaces_an_error_without_stopping_dispatch(self):
+        errors = []
+        child = "import sys\nprint('42',flush=True)\nsys.stdin.read()\n"
+        client = StdioClient([sys.executable, "-u", "-c", child], lambda _m: None,
+                             on_callback_error=errors.append)
+        try:
+            self._drain_until(client, lambda: bool(errors))
+            self.assertIn("无法识别", str(errors[0]))
+        finally:
+            client.close()
+            client.process.wait(timeout=3)
 
     @staticmethod
     def _drain_until(client, condition):

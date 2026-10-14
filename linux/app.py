@@ -89,6 +89,7 @@ class StdioClient:
         self.messages = queue.Queue()
         self.pending = {}
         self.closed = False
+        self.exit_delivered = False
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -108,7 +109,10 @@ class StdioClient:
         try:
             for line in self.process.stdout:
                 try:
-                    self.messages.put(json.loads(line))
+                    message = json.loads(line)
+                    if not isinstance(message, dict):
+                        raise ValueError("RPC responses must be objects")
+                    self.messages.put(message)
                 except (ValueError, TypeError):
                     self.messages.put({"_unmatched": True, "error": "服务返回了无法识别的数据"})
         finally:
@@ -132,6 +136,7 @@ class StdioClient:
             except queue.Empty:
                 break
             if msg.get("_closed"):
+                self.exit_delivered = True
                 for request_id, callback in list(self.pending.items()):
                     self.pending.pop(request_id, None)
                     try:
@@ -164,20 +169,22 @@ class StdioClient:
             self.process.stdin.close()
         except (OSError, AttributeError):
             pass
-        threading.Thread(target=self._reap_owned_process, daemon=True).start()
+        # Keep this short-lived reaper alive after the window closes, so a stalled
+        # service cannot be orphaned merely because the GUI's main thread exits.
+        threading.Thread(target=self._reap_owned_process).start()
 
     def _reap_owned_process(self):
         if self.process.poll() is not None:
             self.process.wait()
             return
         try:
-            self.process.wait(timeout=0.8)
+            self.process.wait(timeout=5)
             return
         except subprocess.TimeoutExpired:
             pass
         try:
             self.process.terminate()
-            self.process.wait(timeout=0.8)
+            self.process.wait(timeout=5)
             return
         except subprocess.TimeoutExpired:
             pass
@@ -290,7 +297,7 @@ class CoindexApp:
         self.heading_var = tk.StringVar(value="待办")
         ttk.Label(header, textvariable=self.heading_var, style="Title.TLabel").pack(side="left")
         self.status_var = tk.StringVar(value="")
-        ttk.Label(header, textvariable=self.status_var, style="Muted.TLabel").pack(side="left", padx=16, pady=(7, 0))
+        ttk.Label(header, textvariable=self.status_var, style="Muted.TLabel", wraplength=300).pack(side="left", padx=16, pady=(7, 0))
         self.primary_button = ttk.Button(header, text="＋ 新建待办", style="Accent.TButton", command=self.new_task)
         self.primary_button.pack(side="right")
         self.update_button = ttk.Button(header, text="更新", command=self.manual_sync)
@@ -403,7 +410,8 @@ class CoindexApp:
     def _drain(self):
         if self.client:
             self.client.drain()
-            if self.client.process.poll() is None:
+            # EOF is queued by the reader thread slightly after process exit.
+            if not self.client.closed and not getattr(self.client, "exit_delivered", False):
                 self.root.after(50, self._drain)
 
     def _service_exit(self, code):
@@ -849,8 +857,10 @@ class SettingsDialog:
         self._check("workdays_only", "仅工作日运行", self.saved.get("workdays_only", True))
         self._check("work_hours_enabled", "限定工作时段", self.saved.get("work_hours_enabled", False))
         self._entry("interval_seconds", "检测间隔（秒，30–3600）", self.saved.get("interval_seconds", 1800))
-        self._entry("work_start_minutes", "开始时间（当天分钟数，例如 540 = 09:00）", self.saved.get("work_start_minutes", 540))
-        self._entry("work_end_minutes", "结束时间（当天分钟数，例如 1080 = 18:00）", self.saved.get("work_end_minutes", 1080))
+        for key, label, default in (("work_start_minutes", "开始时间（北京时间，HH:MM）", 540),
+                                    ("work_end_minutes", "结束时间（北京时间，HH:MM）", 1080)):
+            minutes = self.saved.get(key, default)
+            self._entry(key, label, "%02d:%02d" % divmod(minutes, 60))
         self._header("SSH 来源")
         self._check("local_enabled", "启用本机来源", "mac" in self.saved.get("enabled_hosts", ["mac"]))
         self.host_list = ttk.Frame(self.form)
@@ -907,6 +917,8 @@ class SettingsDialog:
         except ValueError as exc:
             messagebox.showerror("设置无效", str(exc), parent=self.win)
             return
+        self._checking_local_paths = tuple(str(values[key]).strip() for key in ("codex_home", "codex_cli", "codex_app"))
+        values["connection_setup_complete"] = False
         # The service checks its persisted connection settings. Save edited paths
         # first, while preserving an incomplete gate until this local check succeeds.
         self.app._rpc("settings", lambda r: self._after_local_settings(r), values=values)
@@ -930,6 +942,12 @@ class SettingsDialog:
         result = response.get("result", {})
         if result.get("ok"):
             if local:
+                checked_paths = getattr(self, "_checking_local_paths", None)
+                current_paths = tuple(str(self.vars[key].get()).strip() for key in ("codex_home", "codex_cli", "codex_app"))
+                if checked_paths is not None and current_paths != checked_paths:
+                    self._local_check_failed()
+                    messagebox.showerror("请重新检查连接", "检查期间本机路径已更改，请保存后重新检查。", parent=self.win)
+                    return
                 self._local_connection_succeeded = True
                 self._tested_local_paths = tuple(str(self.vars[key].get()).strip() for key in ("codex_home", "codex_cli", "codex_app"))
                 self.saved["connection_setup_complete"] = True
@@ -952,11 +970,19 @@ class SettingsDialog:
             if key.startswith("host:"):
                 continue
             value = var.get()
-            if key in ("interval_seconds", "work_start_minutes", "work_end_minutes"):
+            if key in ("work_start_minutes", "work_end_minutes"):
+                try:
+                    hour, minute = map(int, str(value).split(":"))
+                    if not 0 <= hour < 24 or not 0 <= minute < 60:
+                        raise ValueError()
+                    value = hour * 60 + minute
+                except (ValueError, TypeError):
+                    raise ValueError("开始和结束时间请填写 HH:MM，例如 09:00")
+            elif key == "interval_seconds":
                 try:
                     value = int(value)
                 except (ValueError, TypeError):
-                    raise ValueError("检测间隔和时间请填写整数")
+                    raise ValueError("检测间隔请填写整数秒数")
             values[key] = value
         remotes = copy.deepcopy(self.saved.get("remote_hosts", []))
         enabled = ["mac"] if self.vars.get("local_enabled", tk.BooleanVar(value=True)).get() else []
