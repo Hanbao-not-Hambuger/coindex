@@ -244,4 +244,3 @@ def download_url(store):
     if not _trusted_url(saved.get("url"), page) or not (_trusted_url(target, page) or _trusted_url(target, asset)):
         raise ValueError("\u66f4\u65b0\u4e0b\u8f7d\u5730\u5740\u65e0\u6548\uff0c\u8bf7\u91cd\u65b0\u68c0\u67e5\u7248\u672c")
     return target
-
