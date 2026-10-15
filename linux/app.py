@@ -25,21 +25,23 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from platform_paths import default_data_dir
 try:
     from .palette import TOKENS
 except ImportError:
-    from palette import TOKENS
+    from linux.palette import TOKENS
 if tk is not None:
     try:
         from .design import apply_theme, RoundedPanel, Icon
         from .summaries import SummaryPage
         from .updates import UpdateController
     except ImportError:  # Direct script entry point.
-        from design import apply_theme, RoundedPanel, Icon
-        from summaries import SummaryPage
-        from updates import UpdateController
+        from linux.design import apply_theme, RoundedPanel, Icon
+        from linux.summaries import SummaryPage
+        from linux.updates import UpdateController
 
 
 
