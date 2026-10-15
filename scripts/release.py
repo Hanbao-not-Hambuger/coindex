@@ -93,7 +93,7 @@ def package(platform, root=ROOT):
         info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
         if info.get("CFBundleShortVersionString") != value or info.get("CFBundleVersion") != build_number(value):
             raise ValueError("Application Info.plist version does not match VERSION")
-        subprocess.run(["lipo", "-verify_arch", "arm64", "x86_64", str(app / "Contents/MacOS/coindex")], check=True)
+        subprocess.run(["lipo", str(app / "Contents/MacOS/coindex"), "-verify_arch", "arm64", "x86_64"], check=True)
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
         required += [app / "Contents/MacOS/coindex", resource / "AppIcon.icns"]
         output = root / "dist" / ("coindex-" + value + "-macos-universal.zip")

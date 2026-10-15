@@ -325,9 +325,9 @@ class CoindexApp:
         self.sidebar_status.pack(anchor="w", padx=6)
         footer_actions = tk.Frame(footer, bg=self.SIDEBAR)
         footer_actions.pack(fill="x", pady=(10, 0))
-        self.check_updates_button = ttk.Button(footer_actions, text="检查更新…", style="Quiet.TButton", command=self.updates.check)
+        self.check_updates_button = ttk.Button(footer_actions, text="检查更新…", width=0, style="Quiet.TButton", command=self.updates.check)
         self.check_updates_button.pack(side="left")
-        self.workday_button = ttk.Button(footer_actions, text="下班", style="Quiet.TButton", command=self.toggle_workday)
+        self.workday_button = ttk.Button(footer_actions, text="下班", width=0, style="Quiet.TButton", command=self.toggle_workday)
         self.workday_button.pack(side="right")
 
         content = ttk.Frame(shell, padding=(28, 26, 24, 20))

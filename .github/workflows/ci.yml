@@ -65,7 +65,7 @@ jobs:
       - name: Install Tk and headless desktop tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-tk xvfb desktop-file-utils
+          sudo apt-get install -y python3-tk xvfb desktop-file-utils fonts-noto-cjk
       - name: Backend and Linux desktop regression tests
         run: xvfb-run -a python3 -m unittest discover -s tests -v
       - name: Build Linux application bundle

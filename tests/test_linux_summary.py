@@ -199,7 +199,8 @@ class SummaryUITests(unittest.TestCase):
                        self.app.workday_button, self.page.copy_button, self.page.audit_button, self.page.export_button):
             self.assertTrue(widget.winfo_ismapped(), str(widget))
             self.assertGreater(widget.winfo_height(), 20)
-            self.assertGreater(widget.winfo_width(), 30)
+            self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth(),
+                                    str(widget) + " must show its full label")
             self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), bottom)
             self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(), right)
 

@@ -138,11 +138,11 @@ class SummaryPage(ttk.Frame):
         self.text.configure(yscrollcommand=detail_scroll.set)
         self.text.pack(side="left", fill="both", expand=True)
         detail_scroll.pack(side="right", fill="y")
-        self.copy_button = ttk.Button(actions, text="复制 Markdown", command=self.copy_content, state="disabled")
+        self.copy_button = ttk.Button(actions, text="复制 Markdown", width=0, command=self.copy_content, state="disabled")
         self.copy_button.pack(side="left")
-        self.export_button = ttk.Button(actions, text="导出…", command=self.export_content, state="disabled")
+        self.export_button = ttk.Button(actions, text="导出…", width=0, command=self.export_content, state="disabled")
         self.export_button.pack(side="left", padx=8)
-        self.audit_button = ttk.Button(actions, text="筛选依据…", command=self.show_audit)
+        self.audit_button = ttk.Button(actions, text="筛选依据…", width=0, command=self.show_audit)
         self.cancel_button = ttk.Button(actions, text="中止生成", style="Danger.TButton", command=self.cancel)
         self._set_text("点击「新建总结」，选择正在进行的全部待办，或回顾某个时间段。\n\n总结会保存在本机，方便随时查阅和导出。")
         if app.demo:
@@ -260,7 +260,7 @@ class SummaryPage(ttk.Frame):
         if detail.get("work_only") and state == "completed":
             self.subtitle.set(self.subtitle.get() + "\n已排除 %d 件个人项目 · %d 件待确认" %
                               (detail.get("excluded_count", 0), detail.get("uncertain_count", 0)))
-        fallback = {"queued": "已加入生成队列，可以继续处理其他待办。", "running": "正在整理目标、进展和下一步，可以离开此页面。",
+        fallback = {"queued": "已加入生成队列，可以继续处理其他待办。", "running": "正在整理背景、问题、实验结果和结论，可以离开此页面。",
                     "cancelled": "本次总结已中止。可以重新选择范围生成。", "failed": "生成失败：" + str(detail.get("error") or "请检查模型连接后重试。"),
                     "completed": "正在读取总结…"}
         self._set_text(self.current_content or fallback.get(state, "正在读取总结…"))
