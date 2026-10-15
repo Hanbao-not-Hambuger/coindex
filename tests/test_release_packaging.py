@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import struct
 import tarfile
 import tempfile
 import unittest
@@ -84,6 +85,7 @@ class ReleasePackagingTests(unittest.TestCase):
 
     def make_release(self):
         names = release.artifact_names("1.10.0")
+        self.write_dmg_fixture(self.root / names[3])
         mac = self.root / "coindex.app"
         (mac / "Contents/Resources/backend").mkdir(parents=True)
         (mac / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "1.10.0"}))
@@ -108,6 +110,34 @@ class ReleasePackagingTests(unittest.TestCase):
             target.write_text("1.10.0\n" if name == "VERSION" else "")
         release.write_zip(self.root / names[2], release.archive_files(source), source, "coindex")
         return linux
+
+    def write_dmg_fixture(self, target):
+        metadata = plistlib.dumps({"resource-fork": {"blkx": []}})
+        footer = bytearray(512)
+        struct.pack_into(">4sII", footer, 0, b"koly", 4, 512)
+        struct.pack_into(">QQ", footer, 216, 0, len(metadata))
+        target.write_bytes(metadata + footer)
+
+    def test_dmg_is_required_and_truncated_or_invalid_containers_are_rejected(self):
+        self.make_release()
+        image = self.root / "coindex-1.10.0-macos-universal.dmg"
+        release.validate_dmg_container(image)
+        for data in (b"", b"koly", image.read_bytes()[:-20], b"x" * 1024):
+            image.write_bytes(data)
+            with self.assertRaises(ValueError):
+                release.validate_archives(self.root, "1.10.0")
+        image.unlink()
+        with self.assertRaises(FileNotFoundError):
+            release.validate_archives(self.root, "1.10.0")
+
+    def test_dmg_metadata_must_fit_inside_image(self):
+        image = self.root / "invalid.dmg"
+        self.write_dmg_fixture(image)
+        data = bytearray(image.read_bytes())
+        struct.pack_into(">QQ", data, len(data) - 512 + 216, len(data), 4096)
+        image.write_bytes(data)
+        with self.assertRaisesRegex(ValueError, "metadata bounds"):
+            release.validate_dmg_container(image)
 
     def test_validation_rejects_stale_linux_bundle_among_current_artifacts(self):
         linux = self.make_release()
@@ -140,6 +170,9 @@ class ReleasePackagingTests(unittest.TestCase):
         notes = release.release_notes(self.root)
         self.assertIn("New summaries.", notes)
         self.assertNotIn("Old.", notes)
+        self.assertLess(notes.index("macos-universal.dmg"), notes.index("New summaries."))
+        self.assertIn("coindex-1.10.0-linux.tar.gz", notes)
+        self.assertIn("Source code", notes)
         (self.root / "VERSION").write_text("1.11.0\n")
         with self.assertRaises(ValueError):
             release.release_notes(self.root)

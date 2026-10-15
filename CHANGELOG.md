@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.1 — 2026-10-15
+
+- macOS 新增 DMG 安装包：打开后将 coindex 拖到 Applications 安装，兼容 Apple Silicon 和 Intel。
+- Mac 应用内下载更新优先使用 DMG，保留 ZIP 以兼容已有版本。
+- 发布说明顶部直接提供两端安装包下载链接和安装步骤。
+- CI 验证 DMG 完整性、只读挂载、应用内容、签名与 Applications 入口，并将安装盘加入校验清单。
+
 ## 1.10.0 — 2026-10-15
 
 ### Added

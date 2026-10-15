@@ -85,6 +85,35 @@ class UpdateTests(unittest.TestCase):
         self.assertTrue(next_release["should_prompt"])
         self.assertEqual(next_release["skipped_version"], "1.11.0")
 
+    def test_macos_prefers_dmg_even_when_zip_appears_first(self):
+        payload = release_payload()
+        dmg = dict(payload["assets"][0])
+        dmg["name"] = dmg["name"].replace(".zip", ".dmg")
+        dmg["browser_download_url"] = dmg["browser_download_url"].replace(".zip", ".dmg")
+        payload["assets"].append(dmg)
+        with patch("updates.sys.platform", "darwin"):
+            self.run_check(payload)
+            self.assertEqual(updates.download_url(self.store), dmg["browser_download_url"])
+            # A valid ZIP cached by an earlier version must remain usable after upgrading.
+            saved = self.store.meta("update_state")
+            saved["download_url"] = payload["assets"][0]["browser_download_url"]
+            self.store.put_meta("update_state", saved)
+            self.assertTrue(updates.download_url(self.store).endswith(".zip"))
+        self.assertTrue(updates.parse_release(payload, "linux")["download_url"].endswith("-linux.tar.gz"))
+
+    def test_macos_rejects_untrusted_or_duplicate_dmg_without_falling_back_to_zip(self):
+        payload = release_payload()
+        dmg = dict(payload["assets"][0])
+        dmg["name"] = dmg["name"].replace(".zip", ".dmg")
+        dmg["browser_download_url"] = "https://evil.invalid/update.dmg"
+        payload["assets"].append(dmg)
+        with self.assertRaises(ValueError):
+            updates.parse_release(payload, "darwin")
+        dmg["browser_download_url"] = payload["assets"][0]["browser_download_url"].replace(".zip", ".dmg")
+        payload["assets"].append(dict(dmg))
+        with self.assertRaises(ValueError):
+            updates.parse_release(payload, "darwin")
+
     def test_manual_check_bypasses_skip_without_erasing_preference(self):
         self.run_check()
         updates.skip(self.store, "1.11.0")

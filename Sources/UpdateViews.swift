@@ -25,7 +25,7 @@ struct AppUpdateView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(maxHeight: 360).padding(16).background(Palette.surface, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.border))
-                Text((update.downloadUrl.isEmpty || update.downloadUrl == update.url) ? "此版本暂未提供匹配的 Mac 安装包，可打开发布页查看。跳过后，下个新版本发布时再提醒。" : "下载适用于这台 Mac 的新版安装包，完成下载后手动安装。跳过后，下个新版本发布时再提醒。")
+                Text((update.downloadUrl.isEmpty || update.downloadUrl == update.url) ? "此版本暂未提供匹配的 Mac 安装包，可打开发布页查看。跳过后，下个新版本发布时再提醒。" : update.downloadUrl.hasSuffix(".dmg") ? "下载后打开 DMG，将 coindex 拖到 Applications。升级前先退出应用；已有待办和设置会保留。" : "下载后解压，将 coindex 拖到应用程序。升级前先退出应用；已有待办和设置会保留。")
                     .font(.system(size: 11)).foregroundStyle(Palette.muted)
                 if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
                 HStack(spacing: 10) {
