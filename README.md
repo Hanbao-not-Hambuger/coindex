@@ -181,8 +181,8 @@ open -n /Applications/coindex.app --args --demo
 
 ### 下载应用
 
-1. 打开 [Releases](https://github.com/Junming-Liang/coindex/releases/latest)，下载对应版本的 `coindex-版本-macos-universal.zip`。
-2. 解压，把 `coindex.app` 拖到 `/Applications` 或 `~/Applications`。
+1. 打开 [Releases](https://github.com/Junming-Liang/coindex/releases/latest)，点击发布说明顶部的 **macOS 安装包**，下载 `coindex-版本-macos-universal.dmg`。
+2. 双击打开 DMG，将 `coindex.app` 拖到旁边的 **Applications（应用程序）** 文件夹，再从应用程序中打开。安装完成后推出安装盘。升级前先退出旧版，拖入后选择替换。
 3. 安装 Python。已有 Python 3.9+ 可以直接使用；如果使用 [Homebrew](https://brew.sh/)，运行：
 
    ```sh
@@ -193,6 +193,8 @@ open -n /Applications/coindex.app --args --demo
 4. 打开 coindex，按首次连接引导配置 Codex。
 
 应用会查找 `/opt/homebrew/bin/python3`、`/usr/local/bin/python3` 和 `/usr/bin/python3`；Finder 启动的应用通常不会继承终端环境变量。其他 Python 位置的启动方法见[故障排查](docs/troubleshooting.md#找不到-python)。
+
+也保留 `coindex-版本-macos-universal.zip` 兼容下载，解压后拖入应用程序即可。GitHub 自动生成的 **Source code** 是源码，不是安装包。应用与数据分开保存，替换应用不会清除待办和设置。
 
 此版本尚未公证，macOS 可能阻止首次打开。确认下载来自本项目 Release 后，先尝试打开应用，再到「系统设置 → 隐私与安全性」按系统提示选择「仍要打开」。详见 [Apple 的安全打开应用说明](https://support.apple.com/en-us/102445)。若系统提示恶意软件或应用损坏，请停止打开并核对文件。
 

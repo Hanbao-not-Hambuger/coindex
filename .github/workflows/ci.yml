@@ -45,6 +45,7 @@ jobs:
         with:
           name: coindex-macos
           path: |
+            dist/coindex-*-macos-universal.dmg
             dist/coindex-*-macos-universal.zip
             dist/coindex-*-source.zip
           if-no-files-found: error
@@ -110,6 +111,7 @@ jobs:
         with:
           name: coindex-release
           path: |
+            dist/coindex-*.dmg
             dist/coindex-*.zip
             dist/coindex-*.tar.gz
             dist/coindex-*-SHA256SUMS.txt

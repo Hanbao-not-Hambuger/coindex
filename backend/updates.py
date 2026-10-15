@@ -49,12 +49,12 @@ def _trusted_url(value, expected_path):
         return False
 
 
-def _asset_name(version, platform=None):
+def _asset_names(version, platform=None):
     platform = platform or sys.platform
-    suffix = "-macos-universal.zip" if platform == "darwin" else "-linux.tar.gz" if platform.startswith("linux") else None
-    if suffix is None:
+    suffixes = ("-macos-universal.dmg", "-macos-universal.zip") if platform == "darwin" else ("-linux.tar.gz",) if platform.startswith("linux") else ()
+    if not suffixes:
         raise ValueError("\u5f53\u524d\u5e73\u53f0\u6682\u4e0d\u652f\u6301\u66f4\u65b0\u68c0\u67e5")
-    return "coindex-" + version + suffix
+    return tuple("coindex-" + version + suffix for suffix in suffixes)
 
 
 def parse_release(payload, platform=None):
@@ -77,20 +77,23 @@ def parse_release(payload, platform=None):
             raise ValueError()
     except ValueError:
         raise ValueError("\u53d1\u5e03\u65f6\u95f4\u65e0\u6548")
-    expected = _asset_name(version, platform)
+    expected_names = _asset_names(version, platform)
     assets = payload.get("assets")
     if not isinstance(assets, list):
         raise ValueError("\u53d1\u5e03\u6587\u4ef6\u6e05\u5355\u65e0\u6548")
-    matches = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == expected]
-    if len(matches) > 1:
-        raise ValueError("\u53d1\u5e03\u6587\u4ef6\u6e05\u5355\u5305\u542b\u91cd\u590d\u7248\u672c")
     target = url
-    if matches:
+    for expected in expected_names:
+        matches = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == expected]
+        if len(matches) > 1:
+            raise ValueError("\u53d1\u5e03\u6587\u4ef6\u6e05\u5355\u5305\u542b\u91cd\u590d\u7248\u672c")
+        if not matches:
+            continue
         asset = matches[0]
         target = asset.get("browser_download_url")
         path = "/" + REPOSITORY + "/releases/download/" + tag + "/" + expected
         if asset.get("state") != "uploaded" or not _trusted_url(target, path):
             raise ValueError("\u66f4\u65b0\u4e0b\u8f7d\u5730\u5740\u65e0\u6548")
+        break
     title = payload.get("name") or ("coindex " + version)
     notes = payload.get("body") or "\u6b64\u7248\u672c\u672a\u63d0\u4f9b\u66f4\u65b0\u8bf4\u660e\u3002"
     if not isinstance(title, str) or not isinstance(notes, str):
@@ -239,8 +242,8 @@ def download_url(store):
     if tag not in (version, "v" + version):
         raise ValueError("\u66f4\u65b0\u7248\u672c\u4fe1\u606f\u65e0\u6548")
     page = "/" + REPOSITORY + "/releases/tag/" + tag
-    asset = "/" + REPOSITORY + "/releases/download/" + tag + "/" + _asset_name(version)
+    assets = ["/" + REPOSITORY + "/releases/download/" + tag + "/" + name for name in _asset_names(version)]
     target = saved.get("download_url")
-    if not _trusted_url(saved.get("url"), page) or not (_trusted_url(target, page) or _trusted_url(target, asset)):
+    if not _trusted_url(saved.get("url"), page) or not (_trusted_url(target, page) or any(_trusted_url(target, asset) for asset in assets)):
         raise ValueError("\u66f4\u65b0\u4e0b\u8f7d\u5730\u5740\u65e0\u6548\uff0c\u8bf7\u91cd\u65b0\u68c0\u67e5\u7248\u672c")
     return target
