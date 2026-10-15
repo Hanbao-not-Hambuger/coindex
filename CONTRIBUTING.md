@@ -42,12 +42,16 @@ build/pet-animation-tests
 
 PR 说明具体问题、结果行为、验证和限制。界面截图只用演示数据。提交前测试、构建与 `git diff --check` 应通过。
 
+## 双平台维护
+
+共享筛选、总结格式、工作分类、自动日程与持久化逻辑放在 backend；SwiftUI 与 Tkinter 只负责交互和展示。修改后端协议时检查两端调用和旧数据兼容。平台特有能力可保留差异，但共同功能应在两端同时可用。
+
+新增 Swift 视图需加入 scripts/build.sh；Python backend/*.py 与 linux/*.py 自动进入对应应用。公开源码使用 scripts/public_files.py 清单，新增资源要显式加入。
+
+总结不得改变任务身份、手动完成、归档、固定标题与催办回执。筛选范围、时间边界、工作分类遗漏、模型失败、自动日程和取消操作使用虚构数据回归；不要为测试调用真实模型。界面变更在 macOS / Linux 分别检查键盘操作、窄窗口、浅深色和错误提示。
+
 ## 发布
 
-```sh
-COINDEX_ARCHS="arm64 x86_64" bash scripts/build.sh
-python3 scripts/check-public-release.py
-python3 scripts/package-source.py
-```
+`VERSION` 是双平台唯一发布版本来源。修改版本时同步更新 CHANGELOG.md；两个平台通过 CI 后可下载保留 14 天的 `coindex-release` 产物。v* 标签通过同一套 CI 后只创建草稿，维护者验收后手动公开。
 
-只发布默认公共构建，不上传含 `COINDEX_INCLUDE_LOCAL_PETS=1` 的个人构建。核对归档清单与 SHA-256，Git 提交使用隐藏邮箱，不发布个人路径、机器地址、日志或真实会话。安全问题按 SECURITY.md 私密报告。
+本地打包、完整校验、草稿审核与维护清单见[双平台发布与维护](docs/releases.md)。不要上传个人构建、真实会话、数据库、日志或本机导入的 Codex 素材；安全问题按 SECURITY.md 私密报告。

@@ -10,7 +10,7 @@
     <img src="https://img.shields.io/badge/Linux-Python%203.9%2B-blue.svg" alt="Linux desktop with Python 3.9 or later" />
     <img src="https://img.shields.io/badge/architecture-arm64%20%7C%20x86__64-blue.svg" alt="Apple Silicon and Intel" />
   </p>
-  <p><a href="https://github.com/Junming-Liang/coindex/releases/tag/v1.9.0">下载 1.9.0</a> · <a href="#快速开始">快速开始</a> · <a href="docs/user-guide.md">使用指南</a> · <a href="https://github.com/Junming-Liang/coindex/issues">反馈问题</a></p>
+  <p><a href="https://github.com/Junming-Liang/coindex/releases/latest">下载最新版本</a> · <a href="#快速开始">快速开始</a> · <a href="docs/user-guide.md">使用指南</a> · <a href="https://github.com/Junming-Liang/coindex/issues">反馈问题</a></p>
 </div>
 
 **AI 干完活了，你却已经忘了当初让它干什么。**
@@ -25,7 +25,7 @@
 
 *虚构演示数据：每个来源的会话分别整理成目标条目，保留机器与原对话。*
 
-> **1.9.0：** 支持 Apple Silicon / Intel 通用应用包。需要 macOS 14+、本机 Python 3.9+ 和已登录的兼容 Codex CLI。应用采用 ad hoc 签名，**尚未经过 Developer ID 签名与 Apple 公证**。
+> 支持 macOS 通用应用和 Linux 桌面。macOS 需 14+；两端需 Python 3.9+ 和已登录的兼容 Codex CLI，Linux 另需 Tkinter。macOS 应用采用 ad hoc 签名，**尚未经过 Developer ID 签名与 Apple 公证**。
 
 ## 目录
 
@@ -105,7 +105,13 @@
 
 **自动整理只维护清单；催办由你主动点击。** 发送成功不等于任务完成。回执不明时，先核对原对话，确认未送达后再重试；coindex 不自动重复提交，不代答或批准原任务权限。演示模式禁用真实分析和催办。
 
-### 5. 保持适合日常工作的节奏
+### 5. 把跟进记录整理成总结
+
+左侧「总结」可选择正在进行中的全部待办，或一天、近三天、近一周及自定义日期。每个目标按**问题背景、具体问题、目前实验结果、实验结论**各写一句，保留总结历史。可筛选工作任务、补充工作背景，并设置自动总结的频率与时间。
+
+日期范围包含该时段新建、更新或完成的待办；内容来自生成时的已保存进度。未记录的实验结果与结论会明确标注，个人开源 / 自制应用可从工作总结排除，无法判断的事项保留核对。详见[总结指南](docs/summaries.md)。
+
+### 6. 保持适合日常工作的节奏
 
 | 能力 | 说明 |
 | --- | --- |
@@ -175,7 +181,7 @@ open -n /Applications/coindex.app --args --demo
 
 ### 下载应用
 
-1. 打开 [Releases](https://github.com/Junming-Liang/coindex/releases/tag/v1.9.0)，下载 `coindex-1.9.0-macos-universal.zip`。
+1. 打开 [Releases](https://github.com/Junming-Liang/coindex/releases/latest)，下载对应版本的 `coindex-版本-macos-universal.zip`。
 2. 解压，把 `coindex.app` 拖到 `/Applications` 或 `~/Applications`。
 3. 安装 Python。已有 Python 3.9+ 可以直接使用；如果使用 [Homebrew](https://brew.sh/)，运行：
 
@@ -192,17 +198,17 @@ open -n /Applications/coindex.app --args --demo
 
 ### 校验下载
 
-同时下载 `coindex-1.9.0-SHA256SUMS.txt`，在下载目录运行：
+同时下载该版本的 `coindex-版本-SHA256SUMS.txt`，在只包含本次下载文件的目录运行：
 
 ```sh
-shasum -a 256 coindex-1.9.0-macos-universal.zip
+shasum -a 256 -c coindex-*-SHA256SUMS.txt
 ```
 
-结果应与校验文件中同名条目一致。校验值用于检查下载完整性，不代替 Developer ID 签名或 Apple 公证。
+所下载的文件应显示 OK；未下载的其他平台或源码包会报告缺少文件，可只核对已下载文件的同名条目。校验值用于检查下载完整性，不代替 Developer ID 签名或 Apple 公证。
 
 ### 更新与卸载
 
-更新前退出 coindex，用新应用替换旧应用，保留原数据目录。公开版使用 `org.coindex.desktop` 标识；从早期个人构建迁移后，需要重新检查「登录 Mac 时启动」。待办与宠物偏好仍使用相同数据目录。
+应用启动时检查最新公开版本；有更新时展示 GitHub 更新说明，可选择下载或跳过此版本，下个新版本再提醒。也可手动「检查更新」查看已跳过的版本。下载完成后，退出 coindex，用新应用替换旧应用，保留原数据目录。公开版使用 `org.coindex.desktop` 标识；从早期个人构建迁移后，需要重新检查「登录 Mac 时启动」。待办与宠物偏好仍使用相同数据目录。
 
 卸载时退出并移除 `coindex.app`。个人数据不会随应用移除而删除；如需清除，请先备份下方的数据目录，再自行移除。
 
@@ -210,7 +216,7 @@ shasum -a 256 coindex-1.9.0-macos-universal.zip
 
 Linux 桌面版使用 Python 3.9+ 和 Tkinter，不需要安装 Python 第三方依赖或管理员权限。Ubuntu / Debian 安装 `python3-tk`；Fedora 安装 `python3-tkinter`。请先确保 `python3` 和 `python3-tk` 来自同一套 Python 环境。
 
-先从源码构建 Linux 包：
+从 [Releases](https://github.com/Junming-Liang/coindex/releases/latest) 下载对应版本的 `coindex-版本-linux.tar.gz` 和 SHA-256 清单，校验后解压并运行其中的安装器。若该发布版本未提供 Linux 包，可从源码构建：
 
 ```sh
 bash scripts/build-linux.sh
@@ -412,9 +418,13 @@ backend/
   analyzer.py        隔离的结构化模型分析
   store.py           SQLite、手动决定与待办身份
   service.py         stdin / stdout 服务与调度
+  summaries.py       总结范围、工作筛选、模型格式与自动日程
+  updates.py         最新稳定版本检查与跳过偏好
   nudge.py           本机催办与持久回执
   remote_rpc.py      SSH 共享服务连接
+linux/               Tkinter 桌面与总结界面
 scripts/             构建、演示、打包与发布检查
+VERSION              双平台统一发布版本
 tests/              状态、采集、调度、连接与回执回归测试
 docs/               使用、SSH 与故障排查指南
 Resources/           品牌与默认小猫插画
@@ -430,6 +440,7 @@ Resources/           品牌与默认小猫插画
 - [更新记录](CHANGELOG.md)
 - [安全政策](SECURITY.md)
 - [设计规范](DESIGN.md)
+- [双平台发布与维护](docs/releases.md)
 
 coindex 是独立社区项目，与 OpenAI 没有官方隶属关系。
 

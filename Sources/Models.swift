@@ -179,6 +179,9 @@ struct Snapshot: Decodable {
     let sync: SyncStatus
     let schedule: DetectionSchedule?
     let nudges: [NudgeRecord]?
+    let summaries: [TodoSummary]?
+    let summarySchedule: SummarySchedule?
+    let appUpdate: AppUpdate?
 }
 
 func displayHost(_ host: String) -> String { ["mac":"这台 Mac","manual":"手动添加"][host] ?? host }
@@ -199,4 +202,119 @@ func relativeTime(_ stamp: Double) -> String {
     if seconds < 3600 { return "\(seconds / 60) 分钟前" }
     if seconds < 86400 { return "\(seconds / 3600) 小时前" }
     return "\(seconds / 86400) 天前"
+}
+
+
+struct TodoSummary: Decodable, Identifiable {
+    let id: String
+    let title: String
+    let status: String
+    let scope: String
+    let startDate: String
+    let endDate: String
+    let createdAt: Double
+    let finishedAt: Double
+    let taskCount: Int
+    let origin: String
+    let error: String
+    let model: String
+    let effort: String
+    let workOnly: Bool?
+    let excludedCount: Int?
+    let uncertainCount: Int?
+    var pending: Bool { status == "queued" || status == "running" }
+    var includedCount: Int { workOnly == true && status == "completed" ? max(0, taskCount - (excludedCount ?? 0)) : taskCount }
+    var statusTitle: String {
+        ["queued": "等待生成", "running": "生成中", "completed": "已完成", "failed": "生成失败", "cancelled": "已中止"][status] ?? status
+    }
+    var scopeTitle: String { scope == "active" ? "全部未完成待办（含稍后处理）" : startDate == endDate ? startDate : "\(startDate) — \(endDate)" }
+}
+
+struct SummarySource: Decodable, Identifiable {
+    let id: String
+    let title: String
+    let status: String
+    let host: String?
+    let progress: String?
+    let detail: String?
+    let nextAction: String?
+    let relevance: String?
+    let relevanceReason: String?
+}
+
+struct SummaryDetail: Decodable {
+    let id: String
+    let content: String
+    let sources: [SummarySource]
+}
+
+struct SummaryPreview: Decodable {
+    let title: String
+    let taskCount: Int
+    let counts: [String: Int]
+    let startDate: String
+    let endDate: String
+}
+
+struct SummaryGenerationResult: Decodable {
+    let summaryId: String
+    let snapshot: Snapshot
+}
+
+struct SummarySchedule: Decodable {
+    var enabled: Bool
+    var frequency: String
+    var timeMinutes: Int
+    var weekday: Int
+    var intervalHours: Int
+    var scope: String
+    var days: Int
+    var workdaysOnly: Bool
+    var workOnly: Bool
+    var workContext: String
+    let nextAt: Double?
+    let lastAt: Double
+    let description: String
+
+    static var defaults: SummarySchedule {
+        SummarySchedule(enabled: false, frequency: "daily", timeMinutes: 1080, weekday: 0, intervalHours: 24,
+                        scope: "period", days: 1, workdaysOnly: false, workOnly: false, workContext: "", nextAt: nil, lastAt: 0, description: "自动总结未开启")
+    }
+    var values: [String: Any] {
+        ["enabled": enabled, "frequency": frequency, "time_minutes": timeMinutes, "weekday": weekday,
+         "interval_hours": intervalHours, "scope": scope, "days": days, "workdays_only": workdaysOnly,
+         "work_only": workOnly, "work_context": workContext]
+    }
+}
+
+enum SummaryDates {
+    static var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        return calendar
+    }
+    static func string(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
+
+struct AppUpdate: Decodable {
+    let currentVersion: String
+    let checking: Bool
+    let available: Bool
+    let version: String
+    let title: String
+    let notes: String
+    let url: String
+    let downloadUrl: String
+    let publishedAt: String
+    let error: String
+    let checkedAt: Double
+    let skippedVersion: String
+    let shouldPrompt: Bool
 }

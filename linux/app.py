@@ -34,8 +34,12 @@ except ImportError:
 if tk is not None:
     try:
         from .design import apply_theme, RoundedPanel, Icon
+        from .summaries import SummaryPage
+        from .updates import UpdateController
     except ImportError:  # Direct script entry point.
         from design import apply_theme, RoundedPanel, Icon
+        from summaries import SummaryPage
+        from updates import UpdateController
 
 
 
@@ -230,6 +234,7 @@ class CoindexApp:
         self._empty_signature = None
         self._conversation_filter = None
         self.client_factory = client_factory
+        self.updates = UpdateController(self)
         self._build()
         if demo:
             self._render()
@@ -286,7 +291,7 @@ class CoindexApp:
         sidebar.pack_propagate(False)
         tk.Frame(shell, bg=self.BORDER, width=1).pack(side="left", fill="y")
         brand = tk.Frame(sidebar, bg=self.SIDEBAR)
-        brand.pack(fill="x", padx=20, pady=(28, 30))
+        brand.pack(fill="x", padx=20, pady=(20, 16))
         icon_path = ROOT / "Resources/Brand/AppIcon.png"
         if icon_path.is_file():
             original = tk.PhotoImage(file=str(icon_path))
@@ -306,18 +311,24 @@ class CoindexApp:
             self.category_buttons[kind] = (button, label)
         self.history_button = ttk.Button(sidebar, text="已完成 / 稍后", style="Nav.TButton", command=self._choose_history)
         self.history_button.pack(fill="x", padx=10, pady=(10, 1))
-        tk.Frame(sidebar, height=1, bg=self.BORDER).pack(fill="x", padx=18, pady=18)
+        tk.Frame(sidebar, height=1, bg=self.BORDER).pack(fill="x", padx=18, pady=8)
         self.nav_convs = ttk.Button(sidebar, text="所有对话", style="Nav.TButton", command=lambda: self._switch("conversations"))
         self.nav_convs.pack(fill="x", padx=10, pady=2)
+        self.nav_summaries = ttk.Button(sidebar, text="总结", style="Nav.TButton", command=lambda: self._switch("summaries"))
+        self.nav_summaries.pack(fill="x", padx=10, pady=2)
         footer = tk.Frame(sidebar, bg=self.SIDEBAR)
-        footer.pack(side="bottom", fill="x", padx=16, pady=18)
+        footer.pack(side="bottom", fill="x", padx=16, pady=8)
         self.settings_button = ttk.Button(footer, text="偏好设置", style="Nav.TButton", command=self.open_settings)
-        self.settings_button.pack(fill="x", pady=(0, 12))
+        self.settings_button.pack(fill="x", pady=(0, 4))
         self.sidebar_status = tk.Label(footer, text="正在连接…", bg=self.SIDEBAR, fg=self.MUTED,
                                        justify="left", wraplength=174, font=(self.font_family, 9))
         self.sidebar_status.pack(anchor="w", padx=6)
-        self.workday_button = ttk.Button(footer, text="下班", style="Quiet.TButton", command=self.toggle_workday)
-        self.workday_button.pack(anchor="w", pady=(10, 0))
+        footer_actions = tk.Frame(footer, bg=self.SIDEBAR)
+        footer_actions.pack(fill="x", pady=(10, 0))
+        self.check_updates_button = ttk.Button(footer_actions, text="检查更新…", style="Quiet.TButton", command=self.updates.check)
+        self.check_updates_button.pack(side="left")
+        self.workday_button = ttk.Button(footer_actions, text="下班", style="Quiet.TButton", command=self.toggle_workday)
+        self.workday_button.pack(side="right")
 
         content = ttk.Frame(shell, padding=(28, 26, 24, 20))
         content.pack(side="left", fill="both", expand=True)
@@ -369,6 +380,7 @@ class CoindexApp:
         self.result_label.pack(anchor="w", pady=(0, 10))
         self.task_page = ttk.Frame(content)
         self.conversation_page = ttk.Frame(content)
+        self.summary_page = SummaryPage(content, self)
         self.task_page.pack(fill="both", expand=True)
         task_split = ttk.Frame(self.task_page)
         task_split.pack(fill="both", expand=True)
@@ -460,11 +472,12 @@ class CoindexApp:
             button.configure(text="%s    %d" % (label, count), style="Selected.Nav.TButton" if selected else "Nav.TButton")
         self.history_button.configure(style="Selected.Nav.TButton" if self.tab == "tasks" and self.show_inactive else "Nav.TButton")
         self.nav_convs.configure(style="Selected.Nav.TButton" if self.tab == "conversations" else "Nav.TButton")
+        self.nav_summaries.configure(style="Selected.Nav.TButton" if self.tab == "summaries" else "Nav.TButton")
 
     def _disable_mutations(self):
         if self.demo:
             for widget in (self.primary_button, self.update_button, self.settings_button, self.open_conv_button,
-                           self.close_conv_button, self.workday_button, self.stop_button):
+                           self.close_conv_button, self.workday_button, self.stop_button, self.check_updates_button):
                 widget.configure(state="disabled")
 
     def _rpc(self, method, callback=None, **kwargs):
@@ -550,6 +563,8 @@ class CoindexApp:
             self.host_var.set("全部来源")
         self._render_tasks()
         self._render_conversations()
+        self.summary_page.render()
+        self.updates.observe()
         self._refresh_navigation()
 
     def _kind_label(self, kind):
@@ -953,8 +968,9 @@ class CoindexApp:
 
     def _switch(self, name):
         self.tab = name
+        for page in (self.task_page, self.conversation_page, self.summary_page):
+            page.pack_forget()
         if name == "tasks":
-            self.conversation_page.pack_forget()
             self.task_page.pack(fill="both", expand=True)
             self.result_label.pack(anchor="w", pady=(0, 10), before=self.task_page)
             self.task_filters.pack(fill="x", pady=(0, 18), before=self.result_label)
@@ -964,14 +980,19 @@ class CoindexApp:
                 self.primary_button.pack(side="right")
             self._render_tasks()
         else:
-            self.task_page.pack_forget()
             self.task_filters.pack_forget()
             self.result_label.pack_forget()
-            self.conversation_page.pack(fill="both", expand=True)
             self.primary_button.pack_forget()
-            self.heading_var.set("所有对话")
-            self.summary_var.set("跨设备的原始对话，随时回到上下文。")
-            self._render_conversations()
+            if name == "summaries":
+                self.summary_page.pack(fill="both", expand=True)
+                self.heading_var.set("总结")
+                self.summary_var.set("按目标整理问题背景、具体问题、目前实验结果和实验结论。")
+                self.summary_page.render()
+            else:
+                self.conversation_page.pack(fill="both", expand=True)
+                self.heading_var.set("所有对话")
+                self.summary_var.set("跨设备的原始对话，随时回到上下文。")
+                self._render_conversations()
         self._refresh_navigation()
 
     def _render_conversations(self):

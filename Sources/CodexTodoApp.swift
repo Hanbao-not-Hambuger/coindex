@@ -21,9 +21,13 @@ struct CoindexApp: App {
     @StateObject private var model = AppModel()
     var body: some Scene {
         Window("coindex", id: "main") {
-            MainView().environmentObject(model).onAppear { delegate.model = model; model.pet.connect(model) }
+            MainView().background(HiddenWindowTitle().allowsHitTesting(false)).environmentObject(model).onAppear { delegate.model = model; model.pet.connect(model) }
         }.defaultSize(width: 1200, height: 820)
             .commands {
+                CommandGroup(after: .appInfo) {
+                    Button(model.checkingAppUpdate ? "正在检查版本更新…" : "检查版本更新…") { model.checkForAppUpdates() }
+                        .disabled(model.checkingAppUpdate || model.appUpdateChecksDisabled)
+                }
                 CommandGroup(replacing: .appSettings) {
                     Button("设置…") { model.showSettings = true }.keyboardShortcut(",")
                 }
@@ -67,5 +71,20 @@ struct MenuContent: View {
         PetMenu(pet: model.pet)
         Divider()
         Button("退出 coindex") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+}
+
+
+// Hide only the redundant visible title; retain the window's accessible name,
+// standard traffic lights, title-bar dragging, and normal macOS window behavior.
+private struct HiddenWindowTitle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { TitleVisibilityView() }
+    func updateNSView(_ view: NSView, context: Context) { view.window?.titleVisibility = .hidden }
+
+    private final class TitleVisibilityView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.titleVisibility = .hidden
+        }
     }
 }

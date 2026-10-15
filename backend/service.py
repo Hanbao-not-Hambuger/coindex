@@ -19,6 +19,8 @@ from store import Store
 from connections import profile, ssh_command, ssh_aliases, local_check, remote_check, normalize_remote, codex_home
 from schedule import automatic_state, refresh_calendars, refresh_needed, off_duty_state, finish_workday
 from platform_paths import default_data_dir
+import summaries
+import updates
 
 
 def collect_host(host, request, settings=None):
@@ -109,6 +111,9 @@ def serve(folder):
     worker = None
     calendar_worker = None
     nudge_workers = {}
+    summary_worker = None
+    summary_worker_id = None
+    update_worker = None
 
     def emit(value):
         with output_lock:
@@ -143,6 +148,8 @@ def serve(folder):
         stop_children()
         stop_calendar()
         stop_nudges()
+        stop_summary()
+        stop_update()
         store.put_meta("sync", {"running": False, "phase": ""})
         raise SystemExit(0)
 
@@ -159,6 +166,88 @@ def serve(folder):
                     child.wait(timeout=1)
             store.finish_nudge(action_id, "unknown", error="催办连接已关闭，请先核对原对话")
         nudge_workers.clear()
+
+    def reap_update():
+        nonlocal update_worker
+        if update_worker and update_worker.poll() is not None:
+            if updates.state(store)["checking"]:
+                updates.cancel(store, "版本检查进程已退出，请重试")
+            update_worker = None
+
+    def stop_update():
+        nonlocal update_worker
+        if update_worker and update_worker.poll() is None:
+            updates.cancel(store)
+            try:
+                os.killpg(update_worker.pid, signal.SIGTERM)
+                update_worker.wait(timeout=0.5)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                try: os.killpg(update_worker.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+                try: update_worker.wait(timeout=1)
+                except subprocess.TimeoutExpired: pass
+        update_worker = None
+
+    def start_update(automatic=False):
+        nonlocal update_worker
+        reap_update()
+        if not updates.begin(store, automatic):
+            return False
+        try:
+            cmd = [sys.executable, str(pathlib.Path(__file__).resolve()), "--data-dir", str(folder), "update-check"]
+            if automatic:
+                cmd.append("--automatic")
+            update_worker = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                             start_new_session=True)
+        except Exception as error:
+            updates.cancel(store, redact(str(error)))
+            raise
+        return True
+
+    def reap_summary():
+        nonlocal summary_worker, summary_worker_id
+        if summary_worker and summary_worker.poll() is not None:
+            summaries.fail(store, summary_worker_id, "总结进程已退出，结果未完成，可重新生成")
+            summary_worker = None
+            summary_worker_id = None
+
+    def stop_summary(summary_id=None):
+        nonlocal summary_worker, summary_worker_id
+        if summary_id is None:
+            summary_id = summary_worker_id
+        if summary_id:
+            # Mark first so a late model response can never resurrect a cancelled report.
+            summaries.cancel(store, summary_id)
+        if summary_worker and summary_worker_id == summary_id:
+            if summary_worker.poll() is None:
+                pid = summary_worker.pid
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                    summary_worker.wait(timeout=0.5)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+                finally:
+                    try: os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError: pass
+                    try: summary_worker.wait(timeout=1)
+                    except subprocess.TimeoutExpired: pass
+            summary_worker = None
+            summary_worker_id = None
+
+    def start_summary(selection, origin="manual"):
+        nonlocal summary_worker, summary_worker_id
+        reap_summary()
+        summary_id = summaries.create(store, selection, origin)
+        try:
+            cmd = [sys.executable, str(pathlib.Path(__file__).resolve()), "--data-dir", str(folder),
+                   "summarize", "--summary-id", summary_id]
+            summary_worker = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                              start_new_session=True)
+            summary_worker_id = summary_id
+        except Exception as error:
+            summaries.fail(store, summary_id, error)
+            raise
+        return summary_id
 
     def stop_calendar():
         if calendar_worker and calendar_worker.poll() is None:
@@ -183,6 +272,8 @@ def serve(folder):
     signal.signal(signal.SIGTERM, finish)
     store = Store(folder)
     store.recover_nudges()
+    summaries.recover(store)
+    updates.recover(store)
     store.put_meta("sync", {"running": False, "phase": ""})
     for line in sys.stdin:
         request = {}
@@ -205,6 +296,7 @@ def serve(folder):
                 finish_workday(store)
                 stop_children()
                 stop_calendar()
+                stop_summary()
                 store.put_meta("sync", {"running": False, "phase": "已下班", "finished_at": time.time()})
                 result = store.snapshot()
             elif action == "resume_workday":
@@ -220,8 +312,8 @@ def serve(folder):
                                         "finished_at": time.time()})
                 result = store.snapshot()
             elif action == "settings":
-                if worker and worker.poll() is None and any(k in request.get("values", {}) for k in ("codex_home", "codex_cli", "codex_app", "remote_hosts", "analysis_model", "analysis_effort")):
-                    raise ValueError("请先中止当前更新，再修改连接设置")
+                if ((worker and worker.poll() is None) or (summary_worker and summary_worker.poll() is None)) and any(k in request.get("values", {}) for k in ("codex_home", "codex_cli", "codex_app", "remote_hosts", "analysis_model", "analysis_effort")):
+                    raise ValueError("请先中止当前更新或总结，再修改连接设置")
                 store.save_settings(request.get("values", {}))
                 result = store.snapshot()
             elif action == "ssh_aliases":
@@ -284,7 +376,47 @@ def serve(folder):
             elif action == "act":
                 store.act(request["action"], request["entity_id"], request.get("value"))
                 result = store.snapshot()
+            elif action == "check_updates":
+                result = {"accepted": start_update(request.get("automatic") is True)}
+            elif action == "skip_update":
+                updates.skip(store, request["version"])
+                result = store.snapshot()
+            elif action == "open_update":
+                if request.get("version") != updates.state(store)["version"]:
+                    raise ValueError("该更新已变化，请重新检查版本")
+                url = updates.download_url(store)
+                request_id = request.get("id")
+                def download_and_emit(url=url, request_id=request_id):
+                    try:
+                        command = ["open" if sys.platform == "darwin" else "xdg-open", url]
+                        completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                        if completed.returncode:
+                            raise RuntimeError("无法打开浏览器，请重试")
+                        emit({"id": request_id, "result": {"opened": True}})
+                    except Exception as error:
+                        emit({"id": request_id, "error": redact(str(error))[:1000]})
+                threading.Thread(target=download_and_emit, daemon=True).start()
+                continue
+            elif action == "summary_preview":
+                result = summaries.preview(store, request)
+            elif action == "summary_generate":
+                summary_id = start_summary(request)
+                result = {"summary_id": summary_id, "snapshot": store.snapshot()}
+            elif action == "summary_detail":
+                result = summaries.detail(store, request["summary_id"])
+            elif action == "summary_cancel":
+                stop_summary(request["summary_id"])
+                result = store.snapshot()
+            elif action == "summary_settings":
+                summaries.save_schedule(store, request.get("values", {}))
+                result = store.snapshot()
             elif action == "snapshot":
+                reap_update()
+                reap_summary()
+                if worker is None or worker.poll() is not None:
+                    selection = summaries.automatic_request(store)
+                    if selection is not None:
+                        start_summary(selection, "automatic")
                 for action_id, child in list(nudge_workers.items()):
                     if child.poll() is not None:
                         store.finish_nudge(action_id, "unknown", error="催办连接意外关闭，请先核对原对话")
@@ -301,6 +433,8 @@ def serve(folder):
     stop_children()
     stop_calendar()
     stop_nudges()
+    stop_summary()
+    stop_update()
     store.put_meta("sync", {"running": False, "phase": ""})
     store.db.close()
     service_lock.close()
@@ -309,15 +443,29 @@ def serve(folder):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=str(default_data_dir()))
-    parser.add_argument("command", choices=["serve", "sync", "snapshot", "act", "diagnostics", "calendar-refresh", "nudge"])
+    parser.add_argument("command", choices=["serve", "sync", "snapshot", "act", "diagnostics", "calendar-refresh", "nudge", "summarize", "update-check"])
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--collect-only", action="store_true")
     parser.add_argument("--action")
     parser.add_argument("--id")
     parser.add_argument("--action-id")
+    parser.add_argument("--summary-id")
+    parser.add_argument("--automatic", action="store_true")
     args = parser.parse_args()
     if args.command == "serve":
         serve(args.data_dir)
+    elif args.command == "update-check":
+        store = Store(args.data_dir)
+        try:
+            updates.perform(store, args.automatic)
+        finally:
+            store.db.close()
+    elif args.command == "summarize":
+        store = Store(args.data_dir)
+        try:
+            summaries.run(store, args.summary_id)
+        finally:
+            store.db.close()
     elif args.command == "nudge":
         from nudge import run_nudge
         run_nudge(args.data_dir, args.action_id)

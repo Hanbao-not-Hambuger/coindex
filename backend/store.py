@@ -114,6 +114,8 @@ class Store:
                 AND EXISTS(SELECT 1 FROM tasks WHERE conversation_id=conversations.id AND status='open')""")
             self.db.execute("INSERT INTO meta VALUES('task_policy_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(TASK_POLICY_VERSION),))
         self.db.commit()
+        from summaries import init_schema
+        init_schema(self)
 
     def meta(self, key, default=None):
         row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
@@ -525,9 +527,12 @@ class Store:
         configured = {"mac": local_host_name(), **{r["id"]: r["name"] for r in settings["remote_hosts"]}}
         hosts = [dict(dict(r), name=configured[r["id"]]) for r in self.db.execute("SELECT * FROM hosts") if r["id"] in configured]
         from schedule import automatic_state
+        from summaries import history, schedule_state
+        from updates import state as update_state
         nudges = [self.nudge(r[0]) for r in self.db.execute("""SELECT action_id FROM nudges WHERE status IN ('queued','sending','unknown')
             OR action_id IN (SELECT action_id FROM nudges ORDER BY created_at DESC LIMIT 100) ORDER BY created_at DESC""")]
-        return {"tasks": tasks, "conversations": conversations, "hosts": hosts, "nudges": nudges, "settings": self.settings(), "schedule": automatic_state(self,now),
+        return {"tasks": tasks, "conversations": conversations, "hosts": hosts, "nudges": nudges,
+                "summaries": history(self), "summary_schedule": schedule_state(self, now), "app_update": update_state(self), "settings": self.settings(), "schedule": automatic_state(self,now),
                 "model": settings["analysis_model"], "effort": settings["analysis_effort"], "pending_analysis": len(pending_ids),
                 "last_sync": self.meta("last_sync", 0), "last_analysis": self.meta("last_analysis", 0),
                 "model_error": self.meta("model_error", ""), "sync": self.meta("sync", {}), "now": now}

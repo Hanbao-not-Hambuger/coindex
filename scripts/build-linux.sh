@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$ROOT/dist/coindex-linux"
+DESTINATION="$ROOT/dist/coindex-linux"
+mkdir -p "$ROOT/build" "$ROOT/dist"
+STAGE="$(mktemp -d "$ROOT/build/coindex-linux-stage.XXXXXX")"
+trap 'rm -rf "$STAGE"' EXIT
+APP="$STAGE/coindex-linux"
 
 for required in "$ROOT/linux/app.py" "$ROOT/LICENSE" "$ROOT/Resources/Brand/AppIcon.png"; do
   if [[ ! -f "$required" ]]; then
@@ -10,19 +14,13 @@ for required in "$ROOT/linux/app.py" "$ROOT/LICENSE" "$ROOT/Resources/Brand/AppI
   fi
 done
 
-if [[ -e "$APP" || -L "$APP" ]]; then
-  if [[ ! -d "$APP" || -L "$APP" || ! -f "$APP/coindex" ]] || \
-     ! grep -Fxq '# Managed by coindex build-linux.sh' "$APP/coindex"; then
-    printf 'Refusing to replace an existing unrecognized path: %s\n' "$APP" >&2
-    exit 1
-  fi
-  rm -rf "$APP"
-fi
 mkdir -p "$APP/backend" "$APP/linux" "$APP/Resources/Brand" "$APP/scripts"
 cp "$ROOT/backend/"*.py "$APP/backend/"
 cp "$ROOT/linux/"*.py "$APP/linux/"
 cp "$ROOT/scripts/install-linux.sh" "$ROOT/scripts/install-linux.py" "$APP/scripts/"
 cp "$ROOT/LICENSE" "$APP/LICENSE"
+cp "$ROOT/VERSION" "$APP/VERSION"
+python3 "$ROOT/scripts/release.py" metadata linux "$APP/release.json"
 cp "$ROOT/Resources/Brand/AppIcon.png" "$APP/Resources/Brand/AppIcon.png"
 python3 "$ROOT/scripts/create-demo.py" "$APP/demo.json"
 cat > "$APP/coindex" <<'LAUNCHER'
@@ -37,4 +35,5 @@ exec "$PYTHON" "$APP_DIR/linux/app.py" "$@"
 LAUNCHER
 chmod 0755 "$APP/coindex"
 chmod 0755 "$APP/scripts/install-linux.sh"
-printf 'Built %s\n' "$APP"
+python3 "$ROOT/scripts/release.py" install-build linux "$APP" "$DESTINATION"
+printf 'Built %s\n' "$DESTINATION"
