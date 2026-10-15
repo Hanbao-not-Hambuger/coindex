@@ -13,6 +13,10 @@ Install Python and Tkinter from the same distribution package set:
 
 The installer does not run a package manager or use sudo. Verify the desktop Python has Tkinter with `python3 -m tkinter` before starting the app. If the system's `python3` does not have Tkinter, install the distribution package or select a compatible interpreter with `CODEX_TODO_PYTHON=/path/to/python3`.
 
+## Summaries
+
+The left sidebar includes Summaries, with the same scope, work-only filter, concise four-field format, history, and automatic scheduling as macOS. Both UIs use the shared backend. See the [summary guide](summaries.md) for date boundaries, evidence limitations, and scheduling requirements.
+
 ## Build and install
 
 From a checkout:
@@ -22,7 +26,7 @@ bash scripts/build-linux.sh
 bash scripts/install-linux.sh
 ```
 
-The build creates `dist/coindex-linux`. A release archive can be installed by running its bundled `scripts/install-linux.sh`. The installer copies the bundle to `${XDG_DATA_HOME:-~/.local/share}/coindex-app`, writes the command launcher to `~/.local/bin/coindex` by default, and registers a desktop menu entry and icon under the XDG data home. Use `--prefix /custom/path` to choose another launcher prefix. Add `~/.local/bin` to `PATH` if needed.
+The build creates `dist/coindex-linux`, including VERSION and release.json metadata. Run `python3 scripts/release.py package linux` to produce the versioned tar.gz archive after public-content validation. A release archive can be installed by running its bundled `scripts/install-linux.sh`. The installer copies the bundle to `${XDG_DATA_HOME:-~/.local/share}/coindex-app`, writes the command launcher to `~/.local/bin/coindex` by default, and registers a desktop menu entry and icon under the XDG data home. Use `--prefix /custom/path` to choose another launcher prefix. Add `~/.local/bin` to `PATH` if needed.
 
 No administrator access is required. The installer never starts the app or installs dependencies. Re-running it upgrades the program files while retaining `${XDG_DATA_HOME:-~/.local/share}/coindex`, which stores the SQLite database and settings. Do not place personal database files inside `coindex-app`; upgrades replace that program directory.
 

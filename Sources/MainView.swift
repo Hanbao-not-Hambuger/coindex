@@ -13,24 +13,27 @@ struct MainView: View {
             sidebar.frame(width: 216)
             Rectangle().fill(Palette.border).frame(width: 1)
             VStack(spacing: 0) {
-                header
-                Rectangle().fill(Palette.border).frame(height: 1)
-                if model.filter == "conversations" { conversationList }
-                else if model.tasks.isEmpty { emptyState }
+                if model.filter == "summaries" { SummaryWorkspaceView() }
                 else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(model.tasks) { task in
-                                TaskCard(task: task, selected: task.id == model.selectedTaskId)
-                                    .onTapGesture { model.selectedTaskId = task.id }
-                                    .accessibilityAction(named: Text("查看任务详情")) { model.selectedTaskId = task.id }
-                            }
-                        }.padding(20)
+                    header
+                    Rectangle().fill(Palette.border).frame(height: 1)
+                    if model.filter == "conversations" { conversationList }
+                    else if model.tasks.isEmpty { emptyState }
+                    else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(model.tasks) { task in
+                                    TaskCard(task: task, selected: task.id == model.selectedTaskId)
+                                        .onTapGesture { model.selectedTaskId = task.id }
+                                        .accessibilityAction(named: Text("查看任务详情")) { model.selectedTaskId = task.id }
+                                }
+                            }.padding(20)
+                        }
                     }
                 }
                 footer
             }.frame(minWidth: 390, maxWidth: .infinity).background(Palette.canvas)
-            if let task = model.selectedTask, model.filter != "conversations" {
+            if let task = model.selectedTask, model.filter != "conversations", model.filter != "summaries" {
                 Rectangle().fill(Palette.border).frame(width: 1)
                 detail(task).frame(width: 332)
             }
@@ -42,6 +45,7 @@ struct MainView: View {
             model.reopenMainWindow = { action(id: "main") }
         }
         .sheet(isPresented: $model.showSettings) { SettingsView() }
+        .sheet(isPresented: $model.showAppUpdate) { AppUpdateView() }
         .sheet(isPresented: $model.showPetSettings) { PetSettingsView(pet: model.pet) }
         .sheet(isPresented: $model.showManualEditor) { ManualTodoEditor(task: model.manualEditingTask) }
         .sheet(isPresented: $model.showTitleEditor) {
@@ -89,33 +93,36 @@ struct MainView: View {
                     }
                     VStack(alignment: .leading, spacing: 3) {
                         sectionLabel("记录")
+                        nav("总结", "doc.text", "summaries", nil)
                         nav("稍后处理", "clock", "snoozed", nil)
                         nav("已完成 / 已忽略", "checkmark.circle", "completed", nil)
                         nav("所有对话", "text.bubble", "conversations", nil)
                     }
-                    VStack(alignment: .leading, spacing: 3) {
-                        sectionLabel("对话来源")
-                        Button { model.hostFilter = "all" } label: {
-                            HStack(spacing: 9) {
-                                Image(systemName: "desktopcomputer").frame(width: 18)
-                                Text("所有机器")
-                                Spacer()
-                                if model.hostFilter == "all" { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
-                            }.font(.system(size: 12)).foregroundStyle(Palette.muted)
-                                .padding(.horizontal, 12).padding(.vertical, 8)
-                                .background(model.hostFilter == "all" ? Palette.subtle : .clear, in: RoundedRectangle(cornerRadius: 7))
-                        }.buttonStyle(HoverPlainStyle())
-                        ForEach(model.snapshot?.hosts ?? []) { host in
-                            Button { model.hostFilter = host.id } label: {
-                                HStack(spacing: 12) {
-                                    Circle().fill(host.status == "online" ? Palette.success : host.status == "offline" ? Color.orange : Palette.muted).frame(width: 5, height: 5).frame(width: 18)
-                                    Text(model.hostName(host.id))
+                    if model.filter != "summaries" {
+                        VStack(alignment: .leading, spacing: 3) {
+                            sectionLabel("对话来源")
+                            Button { model.hostFilter = "all" } label: {
+                                HStack(spacing: 9) {
+                                    Image(systemName: "desktopcomputer").frame(width: 18)
+                                    Text("所有机器")
                                     Spacer()
-                                    if model.hostFilter == host.id { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
+                                    if model.hostFilter == "all" { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
                                 }.font(.system(size: 12)).foregroundStyle(Palette.muted)
                                     .padding(.horizontal, 12).padding(.vertical, 8)
-                                    .background(model.hostFilter == host.id ? Palette.subtle : .clear, in: RoundedRectangle(cornerRadius: 7))
-                            }.buttonStyle(HoverPlainStyle()).help(host.detail)
+                                    .background(model.hostFilter == "all" ? Palette.subtle : .clear, in: RoundedRectangle(cornerRadius: 7))
+                            }.buttonStyle(HoverPlainStyle())
+                            ForEach(model.snapshot?.hosts ?? []) { host in
+                                Button { model.hostFilter = host.id } label: {
+                                    HStack(spacing: 12) {
+                                        Circle().fill(host.status == "online" ? Palette.success : host.status == "offline" ? Color.orange : Palette.muted).frame(width: 5, height: 5).frame(width: 18)
+                                        Text(model.hostName(host.id))
+                                        Spacer()
+                                        if model.hostFilter == host.id { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
+                                    }.font(.system(size: 12)).foregroundStyle(Palette.muted)
+                                        .padding(.horizontal, 12).padding(.vertical, 8)
+                                        .background(model.hostFilter == host.id ? Palette.subtle : .clear, in: RoundedRectangle(cornerRadius: 7))
+                                }.buttonStyle(HoverPlainStyle()).help(host.detail)
+                            }
                         }
                     }
                 }.padding(.horizontal, 12)
@@ -540,6 +547,20 @@ struct SettingsView: View {
             HStack(spacing: 10) { BrandBadge(size: 28); Text("设置").font(.system(size: 22, weight: .semibold)); Spacer(); Button("完成") { dismiss() }.buttonStyle(CoindexButtonStyle()).keyboardShortcut(.defaultAction) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    SettingsSection("应用版本", symbol: "shippingbox") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("coindex \(model.appVersion)").font(.headline)
+                                Spacer()
+                                Button(model.checkingAppUpdate ? "正在检查…" : "检查版本更新") { model.checkForAppUpdates() }
+                                    .disabled(model.checkingAppUpdate || model.appUpdateChecksDisabled)
+                                    .accessibilityIdentifier("check-app-updates")
+                            }
+                            Text("启动时检查新版本，显示更新内容后由你选择下载或跳过该版本。")
+                                .font(.caption).foregroundStyle(Palette.muted)
+                            if !model.appUpdateMessage.isEmpty { Text(model.appUpdateMessage).font(.caption).foregroundStyle(Palette.muted) }
+                        }
+                    }
                     ConnectionSettingsView()
                     SettingsSection("更新与启动", symbol: "arrow.triangle.2.circlepath") {
                         VStack(alignment: .leading, spacing: 14) {

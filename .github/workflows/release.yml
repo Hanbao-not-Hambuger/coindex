@@ -1,0 +1,55 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require matching version and release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/release.py check-tag "$RELEASE_TAG"
+  verify:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+  draft:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: coindex-release
+          path: dist
+      - name: Recheck artifacts and prepare release notes
+        run: |
+          python3 scripts/release.py verify
+          python3 scripts/release.py notes > release-notes.md
+      - name: Create or refresh a draft (never publish automatically)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json 2>/dev/null; then
+            python3 -c 'import json; assert json.load(open("release-state.json"))["isDraft"], "Refusing to replace an already published release"'
+            gh release edit "$RELEASE_TAG" --draft --title "coindex $RELEASE_TAG" --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "coindex $RELEASE_TAG" --notes-file release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" dist/coindex-*.zip dist/coindex-*.tar.gz dist/coindex-*-SHA256SUMS.txt --clobber

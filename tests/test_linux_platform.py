@@ -49,6 +49,17 @@ class PlatformTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "xdg-open"):
                 open_desktop_thread(str(uuid.uuid4()), "local")
 
+    def test_direct_entrypoint_loads_frontend_modules_outside_the_checkout(self):
+        app = pathlib.Path(__file__).resolve().parents[1] / "linux/app.py"
+        with tempfile.TemporaryDirectory() as folder:
+            env = dict(os.environ)
+            env.pop("PYTHONPATH", None)
+            result = subprocess.run([sys.executable, str(app), "--help"], cwd=folder, env=env,
+                                    text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--demo", result.stdout)
+        self.assertIn("--data-dir", result.stdout)
+
     def test_linux_app_discovers_adjacent_cli_before_path(self):
         with tempfile.TemporaryDirectory() as folder, patch("connections.sys.platform", "linux"), patch.dict(os.environ, {"CODEX_TODO_CODEX": ""}):
             root = pathlib.Path(folder)

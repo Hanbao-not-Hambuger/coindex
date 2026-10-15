@@ -12,6 +12,19 @@ final class AppModel: ObservableObject {
     @Published var selectedTaskId: String?
     @Published var showSettings = false
     @Published var showPetSettings = false
+    @Published var selectedSummaryId: String?
+    @Published var summaryDetail: SummaryDetail?
+    @Published var summaryLoading = false
+    @Published var summaryError = ""
+    @Published var summaryDialogPresented = false
+    @Published var showAppUpdate = false
+    @Published var appUpdateMessage = ""
+    @Published private(set) var checkingAppUpdate = false
+    private var didCheckAppUpdate = false
+    private var manuallyCheckingAppUpdate = false
+    private var observedUpdateChecking = false
+    private var updateCheckBaseline: Double = 0
+    private var presentedUpdateVersions: Set<String> = []
     let pet = PetController()
     var reopenMainWindow: (() -> Void)?
     @Published var showManualEditor = false
@@ -53,6 +66,15 @@ final class AppModel: ObservableObject {
         start()
     }
 
+    var appVersion: String { snapshot?.appUpdate?.currentVersion ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版" }
+    var appUpdateChecksDisabled: Bool {
+        isDemo || ProcessInfo.processInfo.arguments.contains("--test") ||
+        ProcessInfo.processInfo.environment["COINDEX_DISABLE_UPDATE_CHECK"] == "1" ||
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+    var summaries: [TodoSummary] { snapshot?.summaries ?? [] }
+    var selectedSummary: TodoSummary? { summaries.first { $0.id == selectedSummaryId } }
+    var summaryPending: Bool { summaries.contains { $0.pending } }
     var syncing: Bool { isCancelling || awaitingSync || snapshot?.sync.running == true }
     var isOffDuty: Bool { snapshot?.schedule?.offDuty == true }
     var updateDisabled: Bool { syncing || isOffDuty || isFinishingWorkday || isDemo }
@@ -177,6 +199,10 @@ final class AppModel: ObservableObject {
                     if self.snapshot?.settings.connectionSetupComplete == false { self.showSettings = true }
                 }
                 self.error = ""
+                if !self.didCheckAppUpdate, !self.appUpdateChecksDisabled {
+                    self.didCheckAppUpdate = true
+                    self.checkForAppUpdates(automatic: true)
+                }
                 if checkAutomatic, self.snapshot?.settings.connectionSetupComplete != false, self.snapshot?.schedule?.due == true, !self.updateDisabled { self.sync(automatic:true) }
             } catch { self.error = "无法读取待办数据：\(error.localizedDescription)" }
         })
@@ -194,7 +220,13 @@ final class AppModel: ObservableObject {
                 else if record.status == "failed" || record.status == "unknown" { showToast(record.summary) }
             }
         }
+        let oldSummary = selectedSummary
         snapshot = value
+        receiveAppUpdate(value.appUpdate)
+        if let selected = selectedSummary,
+           oldSummary?.status != selected.status || oldSummary?.finishedAt != selected.finishedAt {
+            loadSummary(selected.id)
+        }
     }
 
     func latestNudge(_ task: TodoTask) -> NudgeRecord? {
@@ -346,6 +378,170 @@ final class AppModel: ObservableObject {
                 completion(nil)
             } catch { completion(error.localizedDescription) }
         }
+    }
+
+    func checkForAppUpdates(automatic: Bool = false) {
+        guard !appUpdateChecksDisabled, !checkingAppUpdate else { return }
+        didCheckAppUpdate = true
+        checkingAppUpdate = true
+        manuallyCheckingAppUpdate = !automatic
+        observedUpdateChecking = false
+        updateCheckBaseline = snapshot?.appUpdate?.checkedAt ?? 0
+        appUpdateMessage = "正在检查版本更新…"
+        request("check_updates", values: ["automatic": automatic], failure: { [weak self] message in
+            guard let self else { return }
+            self.checkingAppUpdate = false
+            self.manuallyCheckingAppUpdate = false
+            self.appUpdateMessage = "检查失败：" + message
+            if !automatic { self.showToast(self.appUpdateMessage) }
+        }) { [weak self] _ in self?.refresh() }
+    }
+
+    private func receiveAppUpdate(_ update: AppUpdate?) {
+        guard let update, !appUpdateChecksDisabled, didCheckAppUpdate else { return }
+        if update.checking {
+            checkingAppUpdate = true
+            observedUpdateChecking = true
+            return
+        }
+        if checkingAppUpdate {
+            guard observedUpdateChecking || update.checkedAt > updateCheckBaseline else { return }
+            checkingAppUpdate = false
+            if !update.error.isEmpty {
+                appUpdateMessage = "检查失败：" + update.error
+                if manuallyCheckingAppUpdate { showToast(appUpdateMessage) }
+                manuallyCheckingAppUpdate = false
+                return
+            }
+            appUpdateMessage = update.available ? "发现新版本 \(update.version)" : "已是最新版本"
+            if manuallyCheckingAppUpdate {
+                if update.available {
+                    presentedUpdateVersions.remove(update.version)
+                    if showSettings { showSettings = false }
+                } else { showToast("已是最新版本 \(update.currentVersion)") }
+                manuallyCheckingAppUpdate = false
+            }
+        }
+        presentAppUpdateIfReady()
+    }
+
+    func presentAppUpdateIfReady() {
+        guard !appUpdateChecksDisabled, !checkingAppUpdate, let update = snapshot?.appUpdate,
+              update.available, update.shouldPrompt, !update.version.isEmpty,
+              !presentedUpdateVersions.contains(update.version), !showAppUpdate,
+              !showSettings, !showPetSettings, !showManualEditor, !showTitleEditor, !summaryDialogPresented else { return }
+        // Allow a settings sheet to finish dismissing before opening release notes.
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !self.showSettings, !self.showPetSettings, !self.showManualEditor,
+                  !self.showTitleEditor, !self.summaryDialogPresented, !self.showAppUpdate, !self.checkingAppUpdate,
+                  self.snapshot?.appUpdate?.version == update.version,
+                  self.snapshot?.appUpdate?.shouldPrompt == true,
+                  !self.presentedUpdateVersions.contains(update.version) else { return }
+            self.presentedUpdateVersions.insert(update.version)
+            self.showAppUpdate = true
+        }
+    }
+
+    func skipAppUpdate(completion: @escaping (String?) -> Void) {
+        guard let update = snapshot?.appUpdate, !appUpdateChecksDisabled else { completion("没有可跳过的版本"); return }
+        request("skip_update", values: ["version": update.version], failure: { completion($0) }) { [weak self] data in
+            guard let self else { return }
+            do {
+                self.applySnapshot(try self.decoder.decode(Snapshot.self, from: data))
+                self.showAppUpdate = false
+                self.appUpdateMessage = "已跳过 \(update.version)，下个版本再提醒"
+                completion(nil)
+            } catch { completion(error.localizedDescription) }
+        }
+    }
+
+    func downloadAppUpdate(completion: @escaping (String?) -> Void) {
+        guard let update = snapshot?.appUpdate, !appUpdateChecksDisabled else { completion("没有可下载的版本"); return }
+        request("open_update", values: ["version": update.version], failure: { completion($0) }) { [weak self] _ in
+            self?.showAppUpdate = false
+            self?.showToast((update.downloadUrl.isEmpty || update.downloadUrl == update.url) ? "已打开发布页，请查看适用于这台 Mac 的安装包" : "已打开下载链接，下载完成后安装新版")
+            completion(nil)
+        }
+    }
+
+    func selectSummary(_ id: String) {
+        guard selectedSummaryId != id || summaryDetail == nil else { return }
+        selectedSummaryId = id
+        summaryDetail = nil
+        loadSummary(id)
+    }
+
+    func loadSummary(_ id: String) {
+        guard !isDemo else { summaryLoading = false; return }
+        summaryLoading = true
+        summaryError = ""
+        request("summary_detail", values: ["summary_id": id], failure: { [weak self] message in
+            guard let self, self.selectedSummaryId == id else { return }
+            self.summaryLoading = false
+            self.summaryError = message
+        }) { [weak self] data in
+            guard let self, self.selectedSummaryId == id else { return }
+            self.summaryLoading = false
+            do { self.summaryDetail = try self.decoder.decode(SummaryDetail.self, from: data) }
+            catch { self.summaryError = "无法读取总结：\(error.localizedDescription)" }
+        }
+    }
+
+    func previewSummary(_ values: [String: Any], completion: @escaping (SummaryPreview?, String?) -> Void) {
+        guard !isDemo else { completion(nil, "演示模式不会调用模型；请在正常模式生成总结。"); return }
+        request("summary_preview", values: values, failure: { completion(nil, $0) }) { [weak self] data in
+            guard let self else { return }
+            do { completion(try self.decoder.decode(SummaryPreview.self, from: data), nil) }
+            catch { completion(nil, "无法预览总结范围：\(error.localizedDescription)") }
+        }
+    }
+
+    func generateSummary(_ values: [String: Any], completion: @escaping (String?) -> Void) {
+        guard !isDemo else { completion("演示模式不会调用模型"); return }
+        request("summary_generate", values: values, failure: { completion($0) }) { [weak self] data in
+            guard let self else { return }
+            do {
+                let result = try self.decoder.decode(SummaryGenerationResult.self, from: data)
+                self.applySnapshot(result.snapshot)
+                self.filter = "summaries"
+                self.selectSummary(result.summaryId)
+                completion(nil)
+            } catch { completion("无法读取生成状态：\(error.localizedDescription)") }
+        }
+    }
+
+    func cancelSummary(_ id: String) {
+        request("summary_cancel", values: ["summary_id": id], failure: { [weak self] message in self?.summaryError = message }) { [weak self] data in
+            guard let self else { return }
+            do { self.applySnapshot(try self.decoder.decode(Snapshot.self, from: data)) }
+            catch { self.summaryError = error.localizedDescription }
+        }
+    }
+
+    func saveSummarySettings(_ values: [String: Any], completion: @escaping (String?) -> Void) {
+        guard !isDemo else { completion("演示模式无法保存自动总结设置"); return }
+        request("summary_settings", values: ["values": values], failure: { completion($0) }) { [weak self] data in
+            guard let self else { return }
+            do {
+                self.applySnapshot(try self.decoder.decode(Snapshot.self, from: data))
+                self.showToast("自动总结设置已保存")
+                completion(nil)
+            } catch { completion(error.localizedDescription) }
+        }
+    }
+
+    func exportSummary() {
+        guard let detail = summaryDetail, let summary = selectedSummary, !detail.content.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.title = "导出总结"
+        panel.nameFieldStringValue = summary.title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-") + ".md"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            try detail.content.write(to: destination, atomically: true, encoding: .utf8)
+            showToast("总结已导出")
+        } catch { summaryError = "导出失败：\(error.localizedDescription)" }
     }
 
     func copy(_ text: String) {

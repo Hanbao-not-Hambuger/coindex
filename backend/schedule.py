@@ -72,7 +72,8 @@ def refresh_needed(store, now=None):
     now = time.time() if now is None else now
     if off_duty_state(store, now)["off_duty"]:
         return False
-    if not store.settings()["workdays_only"]:
+    summary_config = store.meta("summary_settings", {})
+    if not store.settings()["workdays_only"] and not (summary_config.get("enabled") and summary_config.get("workdays_only")):
         return False
     for year in calendar_years(now):
         cached = store.meta("calendar_%d" % year, {})

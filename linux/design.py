@@ -176,9 +176,11 @@ def apply_theme(root: tk.Misc) -> str:
                                             ("pressed", colors.get("pressed", colors["normal"])),
                                             ("active", colors.get("active", colors["normal"]))],
                   foreground=[("disabled", TOKENS["muted"])])
+    style.configure("Sidebar.Quiet.TButton", padding=(8, 7))
+
     for button_style in ("Nav.TButton", "Selected.Nav.TButton"):
         style.configure(button_style, font=(family, 10, "bold" if button_style.startswith("Selected") else "normal"),
-                        padding=(10, 7), anchor="w")
+                        padding=(10, 4), anchor="w")
 
     for name in ("TCheckbutton", "TRadiobutton"):
         style.configure(name, font=default, background=TOKENS["canvas"], foreground=TOKENS["ink"],
