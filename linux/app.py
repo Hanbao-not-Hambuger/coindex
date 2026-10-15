@@ -290,32 +290,6 @@ class CoindexApp:
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
         tk.Frame(shell, bg=self.BORDER, width=1).pack(side="left", fill="y")
-        brand = tk.Frame(sidebar, bg=self.SIDEBAR)
-        brand.pack(fill="x", padx=20, pady=(20, 16))
-        icon_path = ROOT / "Resources/Brand/AppIcon.png"
-        if icon_path.is_file():
-            original = tk.PhotoImage(file=str(icon_path))
-            self.brand_image = original.subsample(max(1, original.width() // 30))
-            tk.Label(brand, image=self.brand_image, bg=self.SIDEBAR).pack(side="left", padx=(0, 9))
-        tk.Label(brand, text="coindex", bg=self.SIDEBAR, fg=self.INK,
-                 font=(self.font_family, 17, "bold")).pack(side="left")
-        tk.Label(sidebar, text="工作空间", bg=self.SIDEBAR, fg=self.MUTED,
-                 font=(self.font_family, 9)).pack(anchor="w", padx=22, pady=(0, 8))
-        self.nav_tasks = ttk.Button(sidebar, text="所有待办", style="Selected.Nav.TButton", command=lambda: self._choose_kind("全部类型"))
-        self.nav_tasks.pack(fill="x", padx=10, pady=2)
-        self.category_buttons = {}
-        for label, kind in (("进行中", "进行中"), ("结果校对", "结果校对"), ("继续推进", "继续"),
-                            ("等待结果", "等待"), ("需要决定", "决策"), ("手动待办", "手动")):
-            button = ttk.Button(sidebar, text=label, style="Nav.TButton", command=lambda k=kind: self._choose_kind(k))
-            button.pack(fill="x", padx=10, pady=1)
-            self.category_buttons[kind] = (button, label)
-        self.history_button = ttk.Button(sidebar, text="已完成 / 稍后", style="Nav.TButton", command=self._choose_history)
-        self.history_button.pack(fill="x", padx=10, pady=(10, 1))
-        tk.Frame(sidebar, height=1, bg=self.BORDER).pack(fill="x", padx=18, pady=8)
-        self.nav_convs = ttk.Button(sidebar, text="所有对话", style="Nav.TButton", command=lambda: self._switch("conversations"))
-        self.nav_convs.pack(fill="x", padx=10, pady=2)
-        self.nav_summaries = ttk.Button(sidebar, text="总结", style="Nav.TButton", command=lambda: self._switch("summaries"))
-        self.nav_summaries.pack(fill="x", padx=10, pady=2)
         footer = tk.Frame(sidebar, bg=self.SIDEBAR)
         footer.pack(side="bottom", fill="x", padx=16, pady=8)
         self.settings_button = ttk.Button(footer, text="偏好设置", style="Nav.TButton", command=self.open_settings)
@@ -329,6 +303,58 @@ class CoindexApp:
         self.check_updates_button.pack(side="left")
         self.workday_button = ttk.Button(footer_actions, text="下班", width=0, style="Quiet.TButton", command=self.toggle_workday)
         self.workday_button.pack(side="right")
+        records = tk.Frame(sidebar, bg=self.SIDEBAR)
+        records.pack(side="bottom", fill="x", pady=(0, 6))
+        tk.Frame(records, height=1, bg=self.BORDER).pack(fill="x", padx=18, pady=8)
+        self.nav_convs = ttk.Button(records, text="所有对话", style="Nav.TButton", command=lambda: self._switch("conversations"))
+        self.nav_convs.pack(fill="x", padx=10, pady=2)
+        self.nav_summaries = ttk.Button(records, text="总结", style="Nav.TButton", command=lambda: self._switch("summaries"))
+        self.nav_summaries.pack(fill="x", padx=10, pady=2)
+
+        brand = tk.Frame(sidebar, bg=self.SIDEBAR)
+        brand.pack(fill="x", padx=20, pady=(20, 16))
+        icon_path = ROOT / "Resources/Brand/AppIcon.png"
+        if icon_path.is_file():
+            original = tk.PhotoImage(file=str(icon_path))
+            self.brand_image = original.subsample(max(1, original.width() // 30))
+            tk.Label(brand, image=self.brand_image, bg=self.SIDEBAR).pack(side="left", padx=(0, 9))
+        tk.Label(brand, text="coindex", bg=self.SIDEBAR, fg=self.INK,
+                 font=(self.font_family, 17, "bold")).pack(side="left")
+        nav_host = tk.Frame(sidebar, bg=self.SIDEBAR)
+        nav_host.pack(fill="both", expand=True)
+        self.sidebar_canvas = tk.Canvas(nav_host, bg=self.SIDEBAR, highlightthickness=0, width=190)
+        nav_scroll = ttk.Scrollbar(nav_host, orient="vertical", command=self.sidebar_canvas.yview)
+        self.sidebar_canvas.configure(yscrollcommand=nav_scroll.set)
+        self.sidebar_canvas.pack(side="left", fill="both", expand=True)
+        nav_scroll.pack(side="right", fill="y")
+        navigation = tk.Frame(self.sidebar_canvas, bg=self.SIDEBAR)
+        nav_window = self.sidebar_canvas.create_window((0, 0), window=navigation, anchor="nw")
+        navigation.bind("<Configure>", lambda _event: self.sidebar_canvas.configure(scrollregion=self.sidebar_canvas.bbox("all")))
+        self.sidebar_canvas.bind("<Configure>", lambda event: self.sidebar_canvas.itemconfigure(nav_window, width=event.width))
+        tk.Label(navigation, text="工作空间", bg=self.SIDEBAR, fg=self.MUTED,
+                 font=(self.font_family, 9)).pack(anchor="w", padx=22, pady=(0, 8))
+        self.nav_tasks = ttk.Button(navigation, text="所有待办", style="Selected.Nav.TButton", command=lambda: self._choose_kind("全部类型"))
+        self.nav_tasks.pack(fill="x", padx=10, pady=2)
+        self.category_buttons = {}
+        for label, kind in (("进行中", "进行中"), ("结果校对", "结果校对"), ("继续推进", "继续"),
+                            ("等待结果", "等待"), ("需要决定", "决策"), ("手动待办", "手动")):
+            button = ttk.Button(navigation, text=label, style="Nav.TButton", command=lambda k=kind: self._choose_kind(k))
+            button.pack(fill="x", padx=10, pady=1)
+            self.category_buttons[kind] = (button, label)
+        self.history_button = ttk.Button(navigation, text="已完成 / 稍后", style="Nav.TButton", command=self._choose_history)
+        self.history_button.pack(fill="x", padx=10, pady=(10, 1))
+
+        def reveal_navigation(event):
+            widget = event.widget
+            top = self.sidebar_canvas.canvasy(0)
+            y, height = widget.winfo_y(), widget.winfo_height()
+            viewport = self.sidebar_canvas.winfo_height()
+            if y < top:
+                self._restore_canvas_y(self.sidebar_canvas, y)
+            elif y + height > top + viewport:
+                self._restore_canvas_y(self.sidebar_canvas, y + height - viewport)
+        for button in [self.nav_tasks, self.history_button] + [item[0] for item in self.category_buttons.values()]:
+            button.bind("<FocusIn>", reveal_navigation, add=True)
 
         content = ttk.Frame(shell, padding=(28, 26, 24, 20))
         content.pack(side="left", fill="both", expand=True)
@@ -1084,18 +1110,19 @@ class CoindexApp:
         self._render_conversations()
 
     def _wheel(self, event):
-        if self.tab == "tasks":
-            widget = self.root.winfo_containing(event.x_root, event.y_root)
-            path = str(widget) if widget else ""
-            if path.startswith(str(self.detail)):
-                canvas = self.detail_canvas
-            elif path.startswith(str(self.task_list_frame)):
-                canvas = self.canvas
-            else:
-                return
-            number = getattr(event, "num", None)
-            delta = 1 if number == 5 else -1 if number == 4 else int(-event.delta / 120)
-            canvas.yview_scroll(delta, "units")
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        path = str(widget) if widget else ""
+        if path.startswith(str(self.sidebar_canvas)):
+            canvas = self.sidebar_canvas
+        elif self.tab == "tasks" and path.startswith(str(self.detail)):
+            canvas = self.detail_canvas
+        elif self.tab == "tasks" and path.startswith(str(self.task_list_frame)):
+            canvas = self.canvas
+        else:
+            return
+        number = getattr(event, "num", None)
+        delta = 1 if number == 5 else -1 if number == 4 else int(-event.delta / 120)
+        canvas.yview_scroll(delta, "units")
 
     def cancel_sync(self):
         if not self.demo:

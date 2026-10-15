@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 try:
     import tkinter as tk
+    from tkinter import ttk
 except ImportError:
     tk = None
 
@@ -203,6 +204,23 @@ class SummaryUITests(unittest.TestCase):
                                     str(widget) + " must show its full label")
             self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), bottom)
             self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(), right)
+
+    def test_large_navigation_font_scrolls_without_hiding_persistent_actions(self):
+        self.root.geometry("1000x680")
+        style = ttk.Style(self.root)
+        for name in ("Nav.TButton", "Selected.Nav.TButton"):
+            style.configure(name, font=(self.app.font_family, 18))
+        self.root.update()
+        canvas = self.app.sidebar_canvas
+        self.assertLess(canvas.yview()[1], 1)
+        for button in (self.app.nav_summaries, self.app.settings_button, self.app.check_updates_button, self.app.workday_button):
+            self.assertTrue(button.winfo_ismapped())
+            self.assertLessEqual(button.winfo_rooty() + button.winfo_height(),
+                                 self.root.winfo_rooty() + self.root.winfo_height())
+        self.app.history_button.focus_force()
+        self.root.update()
+        self.assertLessEqual(self.app.history_button.winfo_rooty() + self.app.history_button.winfo_height(),
+                             canvas.winfo_rooty() + canvas.winfo_height() + 1)
 
     def test_short_display_keeps_dialog_actions_visible_and_form_scrollable(self):
         wizard = SummaryWizard(self.page)
